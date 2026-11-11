@@ -70,7 +70,11 @@ final class LiveBox {
             //   以前 `endAll()` 是异步 Task：它可能在新活动建好之后才跑，把**新活动一起 end 掉** ——
             //   表现就是「灵动岛全程什么都没有」（2026-11-11 实测，195 那次）。
             for a in Activity<CredActivityAttributes>.activities {
-                await a.end(nil, dismissalPolicy: .immediate)
+                if #available(iOS 16.2, *) {
+                    await a.end(nil, dismissalPolicy: .immediate)
+                } else {
+                    await a.end(dismissalPolicy: .immediate)
+                }
             }
             do {
                 let act: Activity<CredActivityAttributes>
