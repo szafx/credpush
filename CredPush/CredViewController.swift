@@ -285,7 +285,9 @@ final class CredViewController: UIViewController {
         case .changed: sub = "\(r.sessions.count) 条会话，但都不是服务端那份"
         case .expired: sub = "服务端换票失败，需要在手机上重新登录一次"
         case .noSession: sub = "容器里没有会话"
-        case .newAccount: sub = "服务端还没登记这个号"
+        case .newAccount: sub = r.phone.isEmpty
+            ? "容器还没登录完成（登录成功后会自动识别手机号）"
+            : "服务端还没登记这个号"
         case .notOnDevice: sub = "本机没有这个号的容器（可能在另一台 iPhone 上）"
         }
         if r.cacheBytes > 0 {
@@ -344,8 +346,11 @@ final class CredViewController: UIViewController {
                                        tag: r.phone))
             }
         case .newAccount:
-            out.append(smallButton("推送并添加", Theme.green, #selector(doPushRow(_:)),
-                                   tag: r.phone))
+            // ★ 未命名容器（UserPhone 为空）= 还没登录完成，里面的会话不可用，别给"推送"
+            if !r.phone.isEmpty {
+                out.append(smallButton("推送并添加", Theme.green, #selector(doPushRow(_:)),
+                                       tag: r.phone))
+            }
         case .upToDate:
             if r.cacheBytes > 1_500_000 {
                 out.append(smallButton("清理缓存 " + CacheCleaner.fmt(r.cacheBytes),
