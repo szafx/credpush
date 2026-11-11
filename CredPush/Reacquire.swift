@@ -36,6 +36,8 @@ final class Reacquire {
 
     private var bgTask: UIBackgroundTaskIdentifier = .invalid
     private(set) var running = false
+    /// 用户点了「取消」：所有轮询/超时回调看到它就停
+    private var cancelled = false
     private var stageHandler: ((Stage, String) -> Void)?
 
     /// 超时后没抓到，记下来；回前台再续。
@@ -64,6 +66,7 @@ final class Reacquire {
             done(false, "这台设备没有 Crane 命令行", nil)
             return
         }
+        cancelled = false
         running = true
         stageHandler = stage
         LiveProgress.shared.start(name: name)
@@ -125,6 +128,7 @@ final class Reacquire {
                       deadline: Date,
                       stage: @escaping (Stage, String) -> Void,
                       done: @escaping (Bool, String, FoundSession?) -> Void) {
+        if cancelled { return }
         if Date() > deadline {
             timeout(name: name, known: known, allowNew: allowNew, done: done)
             return
@@ -169,6 +173,7 @@ final class Reacquire {
                          known: Set<String>,
                          allowNew: Bool,
                          done: @escaping (Bool, String, FoundSession?) -> Void) {
+        if cancelled { return }
         endBackground()
         running = false
         // ★ 不管容器此刻认不认得出，都要登记 —— 回前台后按「Crane 名字」再找一次。
@@ -197,6 +202,16 @@ final class Reacquire {
     }
 
     func clearPending() { pending = nil }
+
+    /// 用户点「取消」：真的停下来（以前只改了个文案，轮询和灵动岛都还在跑）
+    func cancel() {
+        cancelled = true
+        running = false
+        pending = nil
+        endBackground()
+        LiveProgress.shared.end("已取消")
+        AppLog.w("reacquire | 用户取消")
+    }
 
     // MARK: - 辅助
 
