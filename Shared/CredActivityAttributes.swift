@@ -18,4 +18,7 @@ struct CredActivityAttributes: ActivityAttributes {
 
     /// 目标账号（手机号或容器名）
     var name: String
+    /// App 的 build 号（诊断用：灵动岛展开后右下角会显示 `v1.0.xxxx`，
+    /// 用来确认渲染的是不是最新一版 Widget —— 旧版不显示这个）
+    var build: String = ""
 }
