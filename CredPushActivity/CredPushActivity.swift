@@ -41,6 +41,7 @@ struct CredProgressWidget: Widget {
                     Spacer()
                     timerText(context.state.stepStartedAt)
                         .font(.caption).monospacedDigit().foregroundColor(accent)
+                        .lineLimit(1).minimumScaleFactor(0.6)
                     Text(denom(context.state)).font(.footnote).bold().foregroundColor(accent)
                 }
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -75,10 +76,14 @@ struct CredProgressWidget: Widget {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 DynamicIslandExpandedRegion(.trailing) {
-                    // 已用时间，系统每秒自动更新
+                    // 已用时间，系统每秒自动更新。
+                    // ★ 尾区很窄：别用 frame(maxWidth: .infinity)。宽度不够时 "0:49"
+                    //   会被逐字符折成竖排（实测 "0:\n4\n9"）。宁可缩小字号也不折行。
                     timerText(context.state.stepStartedAt)
                         .font(.caption).monospacedDigit().foregroundColor(accent)
-                        .frame(maxWidth: .infinity, alignment: .trailing)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.5)
+                        .layoutPriority(1)
                 }
                 DynamicIslandExpandedRegion(.bottom) {
                     HStack(spacing: 6) {
@@ -94,11 +99,18 @@ struct CredProgressWidget: Widget {
                 Text(shortNames[idx(context.state)])
                     .font(.caption2).bold().foregroundColor(accent)
             } compactTrailing: {
-                // 进度 n/6
+                // 已用时间：不点开也能看到这一步跑了多久
+                timerText(context.state.stepStartedAt)
+                    .font(.caption2).monospacedDigit().foregroundColor(accent)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+            } minimal: {
+                // ★ 空间不足时（录屏指示 / 多活动）系统只给 minimal 这一小块。
+                //   以前这里只有一把钥匙，等于什么信息都没有 —— 改成步骤号。
                 Text(denom(context.state))
                     .font(.caption2).bold().monospacedDigit().foregroundColor(accent)
-            } minimal: {
-                Image(systemName: "key.fill").foregroundColor(accent)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
             }
             .keylineTint(accent)
         }
