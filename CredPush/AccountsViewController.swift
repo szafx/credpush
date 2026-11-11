@@ -489,13 +489,16 @@ final class AccountsViewController: UIViewController, UIGestureRecognizerDelegat
         toastView?.removeFromSuperview()
         let container = UIView()
         container.translatesAutoresizingMaskIntoConstraints = false
-        container.backgroundColor = ok ? UIColor(hex: 0x1C2A3A) : Theme.red
+        // ★ 底色是固定的深色，文字不能再用 Theme.text（浅色模式下它是近黑色 → 黑底黑字看不见）。
+        //   用 Theme.textOn() 按底色亮度自动选黑/白。
+        let bg = ok ? UIColor(hex: 0x1C2A3A) : Theme.red
+        container.backgroundColor = bg
         container.layer.cornerRadius = 18
         container.layer.cornerCurve = .continuous
         container.layer.borderWidth = 1
         container.layer.borderColor = (ok ? Theme.line : UIColor.clear).cgColor
 
-        let l = Theme.label(text, size: 13, weight: .semibold, color: ok ? Theme.text : .white)
+        let l = Theme.label(text, size: 13, weight: .semibold, color: Theme.textOn(bg))
         l.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(l)
         NSLayoutConstraint.activate([
