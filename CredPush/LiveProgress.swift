@@ -62,7 +62,8 @@ final class LiveBox {
                                                      detail: "即将切换容器", stepStartedAt: Date())
         latest = st
         activity = nil
-        let attrs = CredActivityAttributes(name: name)
+        let attrs = CredActivityAttributes(name: name,
+                                           build: (Bundle.main.infoDictionary?["CFBundleVersion"] as? String) ?? "")
         AppLog.w("live | 启动：现有活动 \(Activity<CredActivityAttributes>.activities.count) 个；"
                  + "areActivitiesEnabled=\(ActivityAuthorizationInfo().areActivitiesEnabled)")
         Task {
