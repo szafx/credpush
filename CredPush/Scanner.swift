@@ -17,6 +17,29 @@ enum Scanner {
 
     // MARK: - 容器
 
+    /// 按 Crane 的容器 id（= `Library/___Crane_Containers/<id>` 的目录名）找路径。
+    ///
+    /// ★ 新建的容器在**登录完成前 `UserPhone` 是空的**，`allContainers()` 里虽然能看到
+    ///   目录，但 `phone` 字段为空 → 按手机号永远匹配不到。所以新增账号流程必须按
+    ///   「Crane 名字 → id → 目录」认人（2026-11-11 视频里就是这么卡的）。
+    static func path(forCraneID id: String) -> String? {
+        guard !id.isEmpty else { return nil }
+        for c in allContainers() where (c.path as NSString).lastPathComponent == id {
+            return c.path
+        }
+        // 还没被 allContainers() 认出来（少了标记文件）时，直接按目录拼
+        let fm = FileManager.default
+        let dirs = (try? fm.contentsOfDirectory(atPath: appsRoot)) ?? []
+        for d in dirs {
+            let cand = appsRoot + "/" + d + "/Library/___Crane_Containers/" + id
+            var isDir: ObjCBool = false
+            if fm.fileExists(atPath: cand, isDirectory: &isDir), isDir.boolValue {
+                return cand
+            }
+        }
+        return nil
+    }
+
     /// 从容器自己的 `Library/Preferences/cn.10086.app.plist` 读 UserPhone
     static func phoneFromPrefs(_ container: String) -> String {
         let p = container + "/Library/Preferences/cn.10086.app.plist"
