@@ -367,7 +367,8 @@ final class CredViewController: UIViewController {
         let v = Theme.card(14)
         let scanBtn = smallButton("重新扫描", Theme.cardHi, #selector(reload), tag: "scan")
         scanBtn.setTitleColor(Theme.textOn(Theme.cardHi), for: .normal)
-        let pushable = rows.filter { $0.status == .changed || $0.status == .newAccount }
+        // ★ 未命名容器（phone 为空）不算「待推送」——里面的会话是登录前的，推上去必被拒
+        let pushable = rows.filter { ($0.status == .changed || $0.status == .newAccount) && !$0.phone.isEmpty }
         let pushBtn = smallButton(pushable.isEmpty ? "没有待推送" : "推送 \(pushable.count) 个号",
                                   Theme.green, #selector(doPushAll), tag: "pushall")
         pushBtn.isEnabled = !pushable.isEmpty
@@ -401,7 +402,7 @@ final class CredViewController: UIViewController {
     }
 
     @objc private func doPushAll() {
-        let list = rows.filter { $0.status == .changed || $0.status == .newAccount }
+        let list = rows.filter { ($0.status == .changed || $0.status == .newAccount) && !$0.phone.isEmpty }
         pushSessions(list.flatMap { $0.sessions }, allowNew: true)
     }
 
@@ -455,6 +456,8 @@ final class CredViewController: UIViewController {
         let steps = ["关闭旧进程", "切换 Crane 容器", "打开中国移动",
                      "等待登录完成", "读取凭证", "关闭中国移动"]
         let hud = StepHUD.show(in: view, title: title, steps: steps) { [weak self] in
+            // ★ 取消要真的取消：停轮询、清 pending、收掉灵动岛
+            Reacquire.shared.cancel()
             self?.statusLabel.text = "已取消"
         }
         hud.setStep(0, detail: "即将切换…")
