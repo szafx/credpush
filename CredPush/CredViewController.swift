@@ -68,21 +68,50 @@ final class CredViewController: UIViewController {
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         CacheCleaner.purgeOldBackups()
-        // 上次「重新获取」超时的，回前台补一次
-        if let fresh = Reacquire.shared.resumeIfNeeded() {
-            statusLabel.text = "回前台补抓到了新会话"
-            pushSessions([fresh], allowNew: false)
-            return
-        }
+        // 上次「重新获取 / 新增账号」超时的，回前台继续补抓
+        resumePendingIfAny()
         if rows.isEmpty && !scanning { scan() }
+        // 容器信息（UserPhone）可能是刚写下去的：1.5 秒后再扫一次，避免"新容器扫不到"
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.scan() }
     }
 
     /// 从中国移动切回本 App：上次没等到的，这里续上
     @objc private func handleBecameActive() {
-        if let fresh = Reacquire.shared.resumeIfNeeded() {
+        resumePendingIfAny()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.scan() }
+    }
+
+    /// 上次没等到凭证的：回前台立刻试一次，不行就每 2 秒重试（最多 60 秒）
+    private func resumePendingIfAny() {
+        if let r = Reacquire.shared.resumeIfNeeded() {
+            resumeTimer?.invalidate(); resumeTimer = nil
             statusLabel.text = "回前台补抓到了新会话"
-            pushSessions([fresh], allowNew: false)
+            pushSessions([r.session], allowNew: r.allowNew)
+            scan()
             return
+        }
+        // ★ 流程还在跑（超时回调可能还没执行）也算：下一拍 resumeIfNeeded() 会自动接上
+        guard Reacquire.shared.hasPending || Reacquire.shared.isRunning else { return }
+        // 已经超时了但还没抓到：把灵动岛收掉（后台那次 end 可能没来得及执行）
+        if Reacquire.shared.hasPending {
+            LiveProgress.shared.end("等待中 · 已切回 App")
+        }
+        resumeTimer?.invalidate()
+        var ticks = 0
+        resumeTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] t in
+            guard let self = self else { t.invalidate(); return }
+            ticks += 1
+            if let r = Reacquire.shared.resumeIfNeeded() {
+                t.invalidate()
+                self.resumeTimer = nil
+                self.statusLabel.text = "回前台补抓到了新会话"
+                self.pushSessions([r.session], allowNew: r.allowNew)
+                self.scan()
+            } else if ticks >= 30 {
+                t.invalidate()
+                self.resumeTimer = nil
+                self.statusLabel.text = "还没等到凭证；登录完成后点「重新扫描」即可"
+            }
         }
     }
 
@@ -125,9 +154,9 @@ final class CredViewController: UIViewController {
                 let st: CredRow.Status
                 if sessions.isEmpty { st = .noSession }
                 else if !known { st = .newAccount }
-                else if dead { st = .expired }
-                else if hasMatch { st = .upToDate }
-                else { st = .changed }
+                else if !hasMatch { st = .changed }   // ★ 容器里有服务端不认识的会话 → 可以推
+                else if dead { st = .expired }        // 容器里就是服务端那份，但服务端说它死了
+                else { st = .upToDate }
                 let bytes = CacheCleaner.size(CacheCleaner.cacheDir(c.path))
                 rs.append(CredRow(phone: c.phone, container: c.path, sessions: sessions,
                                   status: st, hasMatch: hasMatch, cacheBytes: bytes))
@@ -399,7 +428,7 @@ final class CredViewController: UIViewController {
     /// 新增账号：输入名字 → 建容器 → 切过去 → 拉起中国移动 → 等新凭证
     @objc private func doAddAccount() {
         let a = UIAlertController(title: "新增账号",
-                                  message: "给新容器起个名字（建议直接用手机号，方便识别）。\u{0A}会新建一个 Crane 容器并打开中国移动登录。",
+                                  message: "给新容器起个名字（必须填完整手机号，例如 13567948458）。\u{0A}会新建一个 Crane 容器并打开中国移动登录。\u{0A}⚠️ 登录页请用「短信验证码登录」，不要点「本机号码一键登录」（那是这台手机 SIM 的号）。",
                                   preferredStyle: .alert)
         a.addTextField { tf in
             tf.placeholder = "例如 19900001111"
@@ -520,6 +549,7 @@ final class CredViewController: UIViewController {
     }
 
     private var toastView: UIView?
+    private var resumeTimer: Timer?
     private func toast(_ text: String, ok: Bool = true) {
         toastView?.removeFromSuperview()
         let c = UIView()
