@@ -92,6 +92,11 @@ struct CredProgressWidget: Widget {
                         Spacer()
                         Text("第 \(min(context.state.step + 1, steps.count)) / \(steps.count) 步")
                             .font(.caption2).foregroundColor(.secondary)
+                        if !context.attributes.build.isEmpty {
+                            // ★ 诊断用：能看到这行 = 渲染的是新一版 Widget
+                            Text("v\(context.attributes.build)")
+                                .font(.caption2).foregroundColor(.secondary.opacity(0.55))
+                        }
                     }
                 }
             } compactLeading: {
