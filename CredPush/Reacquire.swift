@@ -140,7 +140,11 @@ final class Reacquire {
             return
         }
         let got = Scanner.readSessions(container: p, phone: name)
-        if let fresh = got.first(where: { !known.contains($0.uid) }) {
+        // ★ 新增账号：UserPhone 要等**登录完成**才写进 plist。
+        //   没写 = 还停在登录页，此时容器里的会话是"登录前"的，推上去必被服务端拒
+        //   （2026-11-11 22:39 实测：抢在登录完成前抓 → 服务端回「没有更新」，且把 App 杀了导致没登成功）
+        let ready = Scanner.phoneFromPrefs(p) == name
+        if ready, let fresh = got.first(where: { !known.contains($0.uid) }) {
             stage(.reading, "拿到新凭证")
             stage(.closing, "关闭中国移动…")
             banner(.closing)
@@ -181,7 +185,9 @@ final class Reacquire {
         guard let p = pending else { return nil }
         guard let path = containerPath(name: p.name) else { return nil }
         let got = Scanner.readSessions(container: path, phone: p.name)
-        if let fresh = got.first(where: { !p.known.contains($0.uid) }) {
+        // ★ 同 poll：必须等登录完成（UserPhone 写进来）才算数，否则拿到的是登录前会话
+        let ready = Scanner.phoneFromPrefs(path) == p.name
+        if ready, let fresh = got.first(where: { !p.known.contains($0.uid) }) {
             pending = nil
             Crane.killChinaMobile()
             LiveProgress.shared.end("已获取凭证")
