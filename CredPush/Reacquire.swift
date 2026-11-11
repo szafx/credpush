@@ -38,8 +38,11 @@ final class Reacquire {
     private(set) var running = false
     private var stageHandler: ((Stage, String) -> Void)?
 
-    /// 超时后没抓到，记下来；回前台再续
-    private(set) var pending: (container: String, name: String, known: Set<String>)?
+    /// 超时后没抓到，记下来；回前台再续。
+    /// ★ 只记「名字 + 已知会话 + 是否新账号」——**不记容器路径**：
+    ///   新建容器在登录完成前 UserPhone 是空的，路径根本认不出来（2026-11-11 视频实测）。
+    private(set) var pending: (name: String, known: Set<String>, allowNew: Bool)?
+    var hasPending: Bool { pending != nil }
 
     var isRunning: Bool { running }
 
@@ -73,6 +76,17 @@ final class Reacquire {
         emit(.prepare, "正在准备…")
         Crane.killChinaMobile()
 
+        // ★ 新增账号时容器可能已经存在（重名 / 上次没删）：先把已有会话记成 known，
+        //   否则登录后会抓到旧会话、当成"新的"推上去。
+        var baseline = known
+        if createIfMissing, known.isEmpty, let p = containerPath(name: name) {
+            baseline = Set(Scanner.readSessions(container: p, phone: name).map { $0.uid })
+        }
+        let allowNew = createIfMissing
+        // 新账号要人工输短信验证码，30 秒根本不够；给 3 分钟。
+        // （App 在后台只能活 ~30 秒，超时后靠回前台 resumeIfNeeded() 继续补抓）
+        let wait: TimeInterval = createIfMissing ? 180 : 120
+
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
             if createIfMissing {
                 emit(.switchContainer, "创建容器 \(name)…")
@@ -95,10 +109,10 @@ final class Reacquire {
                     return
                 }
                 self.bgTask = UIApplication.shared.beginBackgroundTask(withName: "reacquire") { [weak self] in
-                    self?.timeout(name: name, container: container, known: known, done: done)
+                    self?.timeout(name: name, known: baseline, allowNew: allowNew, done: done)
                 }
-                self.poll(name: name, container: container, known: known,
-                          deadline: Date().addingTimeInterval(30),
+                self.poll(name: name, container: container, known: baseline, allowNew: allowNew,
+                          deadline: Date().addingTimeInterval(wait),
                           stage: emit, done: done)
             }
         }
@@ -107,19 +121,20 @@ final class Reacquire {
     // MARK: - 轮询
 
     private func poll(name: String, container: String?, known: Set<String>,
+                      allowNew: Bool,
                       deadline: Date,
                       stage: @escaping (Stage, String) -> Void,
                       done: @escaping (Bool, String, FoundSession?) -> Void) {
         if Date() > deadline {
-            timeout(name: name, container: container, known: known, done: done)
+            timeout(name: name, known: known, allowNew: allowNew, done: done)
             return
         }
-        // 容器路径可能因为新建而变化，每轮重新找
+        // 容器路径可能因为新建而变化，每轮重新找（新容器靠 Crane 名字 → id 认）
         let path = container ?? containerPath(name: name)
         guard let p = path else {
             stage(.waiting, "等待容器出现…")
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-                self?.poll(name: name, container: container, known: known,
+                self?.poll(name: name, container: container, known: known, allowNew: allowNew,
                            deadline: deadline, stage: stage, done: done)
             }
             return
@@ -141,31 +156,36 @@ final class Reacquire {
         stage(.waiting, "等待登录完成…")
         banner(.waiting)
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-            self?.poll(name: name, container: container, known: known,
+            self?.poll(name: name, container: container, known: known, allowNew: allowNew,
                        deadline: deadline, stage: stage, done: done)
         }
     }
 
-    private func timeout(name: String, container: String?, known: Set<String>,
+    private func timeout(name: String,
+                         known: Set<String>,
+                         allowNew: Bool,
                          done: @escaping (Bool, String, FoundSession?) -> Void) {
         endBackground()
         running = false
-        let p = container ?? containerPath(name: name)
-        if let p = p { pending = (p, name, known) }
-        AppLog.w("reacquire | 30 秒超时，等回前台续上")
+        // ★ 不管容器此刻认不认得出，都要登记 —— 回前台后按「Crane 名字」再找一次。
+        pending = (name, known, allowNew)
+        AppLog.w("reacquire | 等待超时，等回前台续上（name=\(name)）")
         bannerDone(ok: false)
         LiveProgress.shared.end("等待中 · 切回 App 继续")
-        done(false, "30 秒内没等到新凭证 —— 切回 App 后会自动再检查", nil)
+        done(false, "还没等到新凭证 —— 切回 App 后会自动再检查", nil)
     }
 
-    /// 回前台时调用：上次没等到就再扫一次
-    func resumeIfNeeded() -> FoundSession? {
+    /// 回前台时调用：上次没等到就再扫一次。
+    /// 返回 (新会话, 是否允许新账号)；没等到返回 nil（pending 保留，调用方可重试）。
+    func resumeIfNeeded() -> (session: FoundSession, allowNew: Bool)? {
         guard let p = pending else { return nil }
-        let got = Scanner.readSessions(container: p.container, phone: p.name)
+        guard let path = containerPath(name: p.name) else { return nil }
+        let got = Scanner.readSessions(container: path, phone: p.name)
         if let fresh = got.first(where: { !p.known.contains($0.uid) }) {
             pending = nil
             Crane.killChinaMobile()
-            return fresh
+            LiveProgress.shared.end("已获取凭证")
+            return (fresh, p.allowNew)
         }
         return nil
     }
@@ -174,15 +194,17 @@ final class Reacquire {
 
     // MARK: - 辅助
 
-    /// 按容器名找路径（Crane 的容器目录是随机的，用 UserPhone/名字匹配不到，
-    /// 所以这里用「按名字 → 遍历容器读名字」的方式）
+    /// 按容器名找路径。
+    /// ① 已登录的容器：按 UserPhone 认（最快）；
+    /// ② 新建容器：UserPhone 要等登录完成才写进 plist，所以按 Crane 的「名字 → id → 目录」认。
     func containerPath(name: String) -> String? {
         for c in Scanner.allContainers() where c.phone == name {
             return c.path
         }
-        // 新建的容器还没登录时 UserPhone 为空，按索引顺序退化为「不在已知列表里的那个」
-        let known = Set(Scanner.allContainers().map { $0.path })
-        _ = known
+        if let c = Crane.list().first(where: { $0.name == name }),
+           let p = Scanner.path(forCraneID: c.id) {
+            return p
+        }
         return nil
     }
 
