@@ -50,7 +50,8 @@ final class ActivityViewController: UIViewController {
         let row2 = Theme.hstack([b4], spacing: 8)
 
         out.backgroundColor = UIColor(hex: 0x070B11)
-        out.textColor = Theme.muted
+        // ★ 底色固定是深色，文字也不能跟着主题变（浅色模式的 Theme.muted 在近黑底上只有 3.8:1）。
+        out.textColor = UIColor(hex: 0x9FB2C8)
         out.font = UIFont.monospacedSystemFont(ofSize: 11.5, weight: .regular)
         out.isEditable = false
         out.layer.cornerRadius = 12
@@ -228,7 +229,8 @@ final class ActivityViewController: UIViewController {
         let t = Theme.label("运行日志", size: 12, color: Theme.dim)
         let text = UITextView()
         text.backgroundColor = UIColor(hex: 0x070B11)
-        text.textColor = Theme.dim
+        // 同上：固定深色底 → 用固定的浅色字，别跟主题走
+        text.textColor = UIColor(hex: 0x8FA3BA)
         text.font = UIFont.monospacedSystemFont(ofSize: 11, weight: .regular)
         text.isEditable = false
         text.text = LocalStore.logTail(60)
