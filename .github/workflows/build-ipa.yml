@@ -63,7 +63,7 @@ jobs:
           set -o pipefail
           xcodebuild -project CredPush.xcodeproj -scheme CredPush \
             -configuration Release -sdk iphoneos -derivedDataPath build \
-            CURRENT_PROJECT_VERSION=${{ github.run_number }} \
+            CURRENT_PROJECT_VERSION=$(( ${{ github.run_number }} + 1000 )) \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
             build 2>&1 | tee build.log | tail -60
           grep -q "BUILD SUCCEEDED" build.log
