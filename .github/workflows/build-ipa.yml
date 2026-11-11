@@ -1,0 +1,107 @@
+name: build-ipa
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 xcodegen
+        run: brew install xcodegen
+
+      - name: 准备 Go（内置 Tailscale tsnet 要用）
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: 构建内置 tsnet（Go → iOS 静态库）
+        working-directory: tsnet
+        run: |
+          set -e
+          [ -f go.mod ] || go mod init me.wsen.scrcpy-tsnet
+          go mod tidy
+          mkdir -p ../tsnetlib
+          CGO_ENABLED=1 GOOS=ios GOARCH=arm64 CC="$(xcrun --sdk iphoneos --find clang)" \
+            CGO_CFLAGS="-arch arm64 -isysroot $(xcrun --sdk iphoneos --show-sdk-path) -mios-version-min=13.0" \
+            CGO_LDFLAGS="-arch arm64 -isysroot $(xcrun --sdk iphoneos --show-sdk-path)" \
+            go build -tags ios -buildmode=c-archive -o ../tsnetlib/libtsnet-forwarder.a ./cmd/c-binding
+          ls -la ../tsnetlib
+          test -f ../tsnetlib/libtsnet-forwarder.h || { echo "没生成头文件"; exit 1; }
+
+      - name: 注入密钥（Actions Secrets → Secrets.swift）
+        run: |
+          cat > CredPush/Secrets.swift <<EOF
+          import Foundation
+
+          enum Secrets {
+              static let password = "${{ secrets.APP_PASSWORD }}"
+              static let pushToken = "${{ secrets.PUSH_TOKEN }}"
+              static let tsAuthKey = "${{ secrets.TS_AUTHKEY }}"
+          }
+          EOF
+          echo "Secrets.swift 已生成（长度: $(wc -c < CredPush/Secrets.swift) 字节）"
+
+      - name: 生成工程
+        run: |
+          xcodegen generate
+          ls -la
+
+      - name: 打印部署目标（诊断）
+        run: |
+          xcodebuild -project CredPush.xcodeproj -target CredPushActivity -showBuildSettings             | grep -E "IPHONEOS_DEPLOYMENT_TARGET|PRODUCT_NAME" || true
+
+      - name: 编译（不签名）
+        run: |
+          # ★ 一定要 pipefail：`xcodebuild … | tail` 里 tail 永远成功，
+          #   不加的话编译失败也会被判绿，最后打出一个只有 Info.plist 的空 IPA。
+          set -o pipefail
+          xcodebuild -project CredPush.xcodeproj -scheme CredPush \
+            -configuration Release -sdk iphoneos -derivedDataPath build \
+            CURRENT_PROJECT_VERSION=${{ github.run_number }} \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build 2>&1 | tee build.log | tail -60
+          grep -q "BUILD SUCCEEDED" build.log
+
+      - name: 嵌入 entitlements（ldid —— TrollStore 只认 __entitlements 段）
+        run: |
+          # ★ 不能用 codesign：它把 entitlements 写在签名块里，TrollStore 用 ldid 重签时
+          #   看不见，装完就只剩它自己那三条（踩过：App 读容器直接被沙盒拒）。
+          curl -fL -o /tmp/ldid https://github.com/ProcursusTeam/ldid/releases/latest/download/ldid_macosx_arm64
+          chmod +x /tmp/ldid
+          APP="build/Build/Products/Release-iphoneos/CredPush.app"
+          # ★ `-S` 后面**不能有空格**：`ldid -S foo.plist bin` 会被解析成
+          #   「签名 foo.plist」→ Unknown header magic（踩过）。
+          /tmp/ldid -SCredPush/CredPush.entitlements "$APP/CredPush"
+          # Widget 扩展也要签（灵动岛 Live Activity）
+          for E in "$APP"/PlugIns/*.appex; do
+            [ -e "$E" ] || continue
+            BIN=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$E/Info.plist")
+            echo "signing appex: $E/$BIN"
+            /tmp/ldid -SCredPushActivity/CredPushActivity.entitlements "$E/$BIN"
+          done
+          echo "=== 签名后的 entitlements ==="
+          /tmp/ldid -e "$APP/CredPush"
+          /tmp/ldid -e "$APP/CredPush" | grep -q "AppDataContainers" || { echo "!! entitlements 没写进去"; exit 1; }
+
+      - name: 打包 IPA
+        run: |
+          APP="build/Build/Products/Release-iphoneos/CredPush.app"
+          test -x "$APP/CredPush" || { echo "!! 没有可执行文件"; exit 1; }
+          mkdir -p out/Payload
+          cp -R "$APP" out/Payload/
+          cd out && zip -qry CredPush.ipa Payload
+          SIZE=$(wc -c < CredPush.ipa | tr -d ' ')
+          echo "IPA $SIZE 字节"
+          test "$SIZE" -gt 30000 || { echo "!! IPA 太小（构建没成功）"; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CredPush-ipa
+          path: out/CredPush.ipa
+          if-no-files-found: error
