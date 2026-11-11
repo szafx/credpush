@@ -85,7 +85,10 @@ final class LiveBox {
                                                      detail: detail, stepStartedAt: stepStart)
         Task {
             if #available(iOS 16.2, *) {
-                await a.update(ActivityContent(state: st, staleDate: nil))
+                // ★ 3 分钟没有新状态就标记为过期：App 被系统挂起、流程其实已经停了时，
+                //   灵动岛会自动变暗，而不是一直显示「进行中」。
+                await a.update(ActivityContent(state: st,
+                                               staleDate: Date().addingTimeInterval(180)))
             } else {
                 await a.update(using: st)
             }
