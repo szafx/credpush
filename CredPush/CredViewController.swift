@@ -524,10 +524,12 @@ final class CredViewController: UIViewController {
         toastView?.removeFromSuperview()
         let c = UIView()
         c.translatesAutoresizingMaskIntoConstraints = false
-        c.backgroundColor = ok ? UIColor(hex: 0x1C2A3A) : Theme.red
+        // ★ 同 AccountsViewController：深色底 + Theme.text 在浅色模式下是黑底黑字。
+        let bg = ok ? UIColor(hex: 0x1C2A3A) : Theme.red
+        c.backgroundColor = bg
         c.layer.cornerRadius = 18
         c.layer.cornerCurve = .continuous
-        let l = Theme.label(text, size: 13, weight: .semibold, color: ok ? Theme.text : .white, lines: 2)
+        let l = Theme.label(text, size: 13, weight: .semibold, color: Theme.textOn(bg), lines: 2)
         l.translatesAutoresizingMaskIntoConstraints = false
         l.textAlignment = .center
         c.addSubview(l)
