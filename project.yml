@@ -1,0 +1,117 @@
+name: CredPush
+options:
+  bundleIdPrefix: com.szafx
+  deploymentTarget:
+    iOS: "15.0"
+  createIntermediateGroups: true
+
+targets:
+  CredPush:
+    type: application
+    platform: iOS
+    sources:
+      - path: CredPush
+      - path: Shared
+    dependencies:
+      - target: CredPushActivity
+        embed: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.szafx.credpush
+        INFOPLIST_FILE: CredPush/Info.plist
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        SWIFT_VERSION: "5.0"
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGNING_ALLOWED: "NO"
+        CODE_SIGNING_REQUIRED: "NO"
+        CODE_SIGN_IDENTITY: ""
+        DEVELOPMENT_TEAM: ""
+        ENABLE_BITCODE: "NO"
+        ONLY_ACTIVE_ARCH: "NO"
+        SWIFT_OBJC_BRIDGING_HEADER: CredPush/Bridging-Header.h
+        HEADER_SEARCH_PATHS: "$(SRCROOT)/tsnetlib"
+        LIBRARY_SEARCH_PATHS: "$(SRCROOT)/tsnetlib"
+        OTHER_LDFLAGS: "$(inherited) -ltsnet-forwarder -lresolv -liconv -ObjC"
+    entitlements:
+      path: CredPush/CredPush.entitlements
+      # ★ 注意：xcodegen 会用这里的 properties **覆盖**上面那个文件，
+      #   所以真正生效的清单必须写在这里（之前只写了前两条，读容器的权限被冲掉了）。
+      properties:
+        platform-application: true
+        # ★ iOS 上要让 App 读容器外的路径（/usr/local/bin 的 cranectl 等），
+        #   macOS 风格的 absolute-path 例外不起作用；只有 no-sandbox 有效（Filza 同款）。
+        com.apple.private.security.no-sandbox: true
+        com.apple.private.security.storage.AppDataContainers: true
+        com.apple.private.security.storage.AppBundles: true
+        com.apple.security.exception.files.absolute-path.read-write:
+          - /private/var/mobile/Containers/
+          - /var/mobile/Containers/
+          - /private/var/mobile/Library/
+          - /var/mobile/Library/
+        com.apple.security.exception.files.absolute-path.read-only:
+          - /private/var/mobile/Library/Preferences/com.opa334.craneprefs.plist
+          - /var/mobile/Library/Preferences/com.opa334.craneprefs.plist
+          - /usr/local/bin/
+          - /private/usr/local/bin/
+          - /usr/bin/
+          - /private/usr/bin/
+          - /bin/
+          - /private/bin/
+          - /usr/lib/
+          - /private/usr/lib/
+        com.apple.security.exception.process-exec:
+          - /usr/local/bin/cranectl
+          - /private/usr/local/bin/cranectl
+          - /usr/bin/uiopen
+          - /private/usr/bin/uiopen
+          - /usr/bin/launchctl
+          - /private/usr/bin/launchctl
+          - /usr/bin/defaults
+          - /private/usr/bin/defaults
+        get-task-allow: true
+
+  # 灵动岛 / 锁屏实时活动（Live Activity）扩展
+  CredPushActivity:
+    type: app-extension
+    platform: iOS
+    deploymentTarget:
+      iOS: "16.1"
+    sources:
+      - path: CredPushActivity
+      - path: Shared
+    info:
+      path: CredPushActivity/Info.plist
+      properties:
+        CFBundleDisplayName: 凭证进度
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        # ★ 必须显式写，光靠 deploymentTarget 有时不会落到 target 的 build settings，
+        #   而 DynamicIsland 这些 API 在 <16.1 下会让结果构建器不可用（编译报 buildBlock 错误）。
+        IPHONEOS_DEPLOYMENT_TARGET: "16.1"
+        PRODUCT_BUNDLE_IDENTIFIER: com.szafx.credpush.activity
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "5.0"
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGNING_ALLOWED: "NO"
+        CODE_SIGNING_REQUIRED: "NO"
+        CODE_SIGN_IDENTITY: ""
+        ENABLE_BITCODE: "NO"
+        SKIP_INSTALL: "YES"
+    entitlements:
+      path: CredPushActivity/CredPushActivity.entitlements
+      properties:
+        platform-application: true
+        get-task-allow: true
+
+schemes:
+  CredPush:
+    build:
+      targets:
+        CredPush: all
+    run:
+      config: Release
