@@ -36,6 +36,12 @@ final class LiveProgress {
                          short: short, detail: detail, startedAt: stepStart)
     }
 
+    /// 不改步骤，只更新说明（比如超时了但浮窗要留着等用户登录）
+    func note(_ detail: String) {
+        HUDWriter.update(title: title, step: max(currentStep, 0), total: 6,
+                         short: "等待中", detail: detail, startedAt: stepStart)
+    }
+
     func end(_ detail: String) {
         visible = false
         HUDWriter.hide()

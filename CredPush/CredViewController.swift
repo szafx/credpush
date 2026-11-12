@@ -92,10 +92,6 @@ final class CredViewController: UIViewController {
         }
         // ★ 流程还在跑（超时回调可能还没执行）也算：下一拍 resumeIfNeeded() 会自动接上
         guard Reacquire.shared.hasPending || Reacquire.shared.isRunning else { return }
-        // 已经超时了但还没抓到：把灵动岛收掉（后台那次 end 可能没来得及执行）
-        if Reacquire.shared.hasPending {
-            LiveProgress.shared.end("等待中 · 已切回 App")
-        }
         resumeTimer?.invalidate()
         var ticks = 0
         resumeTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] t in
@@ -527,6 +523,7 @@ final class CredViewController: UIViewController {
                 case .failure(let e):
                     self.statusLabel.text = "推送失败：\(e.localizedDescription)"
                     self.toast("推送失败", ok: false)
+                    LiveProgress.shared.end("结束")
                 case .success(let obj):
                     let d = obj as? [String: Any] ?? [:]
                     let items = d["items"] as? [[String: Any]] ?? []
@@ -538,6 +535,8 @@ final class CredViewController: UIViewController {
                     }
                     self.statusLabel.text = okN > 0 ? "已更新 \(okN) 个号" : "服务端没有接受"
                     self.toast(okN > 0 ? "已更新 \(okN) 个号" : "没有更新", ok: okN > 0)
+                    // ★ 全部步骤结束（成功/失败都算任务收尾）：这时才收浮窗
+                    LiveProgress.shared.end(okN > 0 ? "已完成" : "结束")
                 }
                 // 重新拉一次服务端状态
                 AccountCache.updated = nil

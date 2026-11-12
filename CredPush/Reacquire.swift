@@ -91,7 +91,9 @@ final class Reacquire {
         let wait: TimeInterval = createIfMissing ? 180 : 120
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-            if createIfMissing {
+            if createIfMissing && !Crane.list().contains(where: { $0.name == name }) {
+                // ★ 已存在同名容器就不要再 create —— 反复 create 会产生多个同名容器，
+                //   流程按名字只取第一个时可能拿到空的那个（2026-11-12 实测）
                 emit(.switchContainer, "创建容器 \(name)…")
                 _ = Crane.run(Crane.cranectl, ["--create", Crane.appBundle, name])
             }
@@ -132,9 +134,9 @@ final class Reacquire {
             timeout(name: name, known: known, allowNew: allowNew, done: done)
             return
         }
-        // 容器路径可能因为新建而变化，每轮重新找（新容器靠 Crane 名字 → id 认）
-        let path = container ?? containerPath(name: name)
-        guard let p = path else {
+        // 同名容器可能不止一个（重复创建过）：逐个看，优先「登录完成 + 有新会话」的那个
+        let paths: [String] = container.map { [$0] } ?? containerPaths(name: name)
+        guard !paths.isEmpty else {
             stage(.waiting, "等待容器出现…")
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
                 self?.poll(name: name, container: container, known: known, allowNew: allowNew,
@@ -142,20 +144,24 @@ final class Reacquire {
             }
             return
         }
-        let got = Scanner.readSessions(container: p, phone: name)
-        // ★ 新增账号：UserPhone 要等**登录完成**才写进 plist。
-        //   没写 = 还停在登录页，此时容器里的会话是"登录前"的，推上去必被服务端拒
-        //   （2026-11-11 22:39 实测：抢在登录完成前抓 → 服务端回「没有更新」，且把 App 杀了导致没登成功）
-        let ready = Scanner.phoneFromPrefs(p) == name
-        if ready, let fresh = got.first(where: { !known.contains($0.uid) }) {
+        var fresh: FoundSession?
+        for p in paths where Scanner.phoneFromPrefs(p) == name {
+            let got = Scanner.readSessions(container: p, phone: name)
+            if let f = got.first(where: { !known.contains($0.uid) }) { fresh = f; break }
+        }
+        if let fresh = fresh {
             stage(.reading, "拿到新凭证")
             stage(.closing, "关闭中国移动…")
             Crane.killChinaMobile()
+            // ★ 杀掉中国移动后把「移动工具集」拉回前台（否则会停在桌面）
+            Crane.run(Crane.uiopen,
+                      ["--bundleid", Bundle.main.bundleIdentifier ?? "com.szafx.credpush"],
+                      timeout: 8)
             endBackground()
             running = false
             pending = nil
             stage(.done, "完成")
-            LiveProgress.shared.end("已获取凭证")
+            // 浮窗不在这里收 —— 等推送完成（view controller）再收
             done(true, "已拿到新凭证", fresh)
             return
         }
@@ -176,23 +182,26 @@ final class Reacquire {
         // ★ 不管容器此刻认不认得出，都要登记 —— 回前台后按「Crane 名字」再找一次。
         pending = (name, known, allowNew)
         AppLog.w("reacquire | 等待超时，等回前台续上（name=\(name)）")
-        LiveProgress.shared.end("等待中 · 切回 App 继续")
+        // ★ 超时不收浮窗：用户可能还在登录，浮窗要留到「全部完成 / 主动取消」
+        LiveProgress.shared.note("等待中 · 切回 App 继续")
         done(false, "还没等到新凭证 —— 切回 App 后会自动再检查", nil)
     }
 
     /// 回前台时调用：上次没等到就再扫一次。
     /// 返回 (新会话, 是否允许新账号)；没等到返回 nil（pending 保留，调用方可重试）。
     func resumeIfNeeded() -> (session: FoundSession, allowNew: Bool)? {
-        guard let p = pending else { return nil }
-        guard let path = containerPath(name: p.name) else { return nil }
-        let got = Scanner.readSessions(container: path, phone: p.name)
-        // ★ 同 poll：必须等登录完成（UserPhone 写进来）才算数，否则拿到的是登录前会话
-        let ready = Scanner.phoneFromPrefs(path) == p.name
-        if ready, let fresh = got.first(where: { !p.known.contains($0.uid) }) {
-            pending = nil
-            Crane.killChinaMobile()
-            LiveProgress.shared.end("已获取凭证")
-            return (fresh, p.allowNew)
+        guard let pend = pending else { return nil }
+        for path in containerPaths(name: pend.name) where Scanner.phoneFromPrefs(path) == pend.name {
+            let got = Scanner.readSessions(container: path, phone: pend.name)
+            if let fresh = got.first(where: { !pend.known.contains($0.uid) }) {
+                pending = nil
+                Crane.killChinaMobile()
+                Crane.run(Crane.uiopen,
+                          ["--bundleid", Bundle.main.bundleIdentifier ?? "com.szafx.credpush"],
+                          timeout: 8)
+                // 浮窗不在这里收 —— 等推送完成再收
+                return (fresh, pend.allowNew)
+            }
         }
         return nil
     }
@@ -211,18 +220,21 @@ final class Reacquire {
 
     // MARK: - 辅助
 
-    /// 按容器名找路径。
-    /// ① 已登录的容器：按 UserPhone 认（最快）；
-    /// ② 新建容器：UserPhone 要等登录完成才写进 plist，所以按 Crane 的「名字 → id → 目录」认。
-    func containerPath(name: String) -> String? {
+    /// 按容器名找路径（取第一个）。
+    func containerPath(name: String) -> String? { containerPaths(name: name).first }
+
+    /// 同名容器可能有多个（反复创建）：
+    /// ① 先列「UserPhone 已写（= 登录完成）」的；
+    /// ② 再补上只按 Crane 名字匹配到的（可能是还没登录的空容器）。
+    func containerPaths(name: String) -> [String] {
+        var out: [String] = []
         for c in Scanner.allContainers() where c.phone == name {
-            return c.path
+            if !out.contains(c.path) { out.append(c.path) }
         }
-        if let c = Crane.list().first(where: { $0.name == name }),
-           let p = Scanner.path(forCraneID: c.id) {
-            return p
+        for c in Crane.list() where c.name == name {
+            if let p = Scanner.path(forCraneID: c.id), !out.contains(p) { out.append(p) }
         }
-        return nil
+        return out
     }
 
     private func endBackground() {
