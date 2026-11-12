@@ -1,13 +1,19 @@
 import Foundation
 
-/// 把浮窗进度写到共享文件，交给越狱 tweak（CredHUD）显示。
+/// 把浮窗进度写进共享的 NSUserDefaults 域，交给越狱 tweak（CredHUD）显示。
 ///
-/// 路径：`/var/mobile/Library/Preferences/credpush_hud.json`
-/// * App 已有 `no-sandbox` + `/var/mobile/Library/` 读写权限（见 project.yml）
-/// * 没装 tweak 时写文件也无害（没人读）
-/// * **只在换步时写**；计时由 tweak 自己按 `startedAt` 走，不需要每秒写文件
+/// 为什么不用裸 JSON 文件：SpringBoard 的沙盒**读不了** `/var/mobile/Library/Preferences/`
+/// 下的任意新文件（实测 `NSData dataWithContentsOfFile:` 返回 nil）。而 `NSUserDefaults`
+/// 走 cfprefsd，App 和 SpringBoard 都能正常读写同一个域 —— 这也是 iOS 上跨进程传状态的标准做法。
+///
+/// 域：`com.szafx.credhud`
+/// 只在**换步**时写；计时由 tweak 自己按 `startedAt` 走。
 enum HUDWriter {
-    static let path = "/var/mobile/Library/Preferences/credpush_hud.json"
+    static let suiteName = "com.szafx.credhud"
+
+    private static var defaults: UserDefaults {
+        UserDefaults(suiteName: suiteName) ?? .standard
+    }
 
     static func update(title: String,
                        step: Int,
@@ -15,24 +21,20 @@ enum HUDWriter {
                        short: String,
                        detail: String,
                        startedAt: Date) {
-        let d: [String: Any] = [
-            "visible": true,
-            "title": title,
-            "step": step,
-            "total": total,
-            "short": short,
-            "detail": detail,
-            "startedAt": startedAt.timeIntervalSince1970,
-        ]
-        write(d)
+        let d = defaults
+        d.set(true, forKey: "visible")
+        d.set(title, forKey: "title")
+        d.set(step, forKey: "step")
+        d.set(total, forKey: "total")
+        d.set(short, forKey: "short")
+        d.set(detail, forKey: "detail")
+        d.set(startedAt.timeIntervalSince1970, forKey: "startedAt")
+        d.synchronize()
     }
 
     static func hide() {
-        write(["visible": false])
-    }
-
-    private static func write(_ d: [String: Any]) {
-        guard let data = try? JSONSerialization.data(withJSONObject: d) else { return }
-        try? data.write(to: URL(fileURLWithPath: path), options: .atomic)
+        let d = defaults
+        d.set(false, forKey: "visible")
+        d.synchronize()
     }
 }

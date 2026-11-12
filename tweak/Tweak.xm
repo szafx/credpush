@@ -8,11 +8,21 @@
 // JSON 格式（由 App 的 HUDWriter 写）：
 //   {"visible":true,"title":"195 抓取","step":3,"total":6,
 //    "short":"等待登录","detail":"等待登录完成…","startedAt":1750000000.0}
+//
+// ★ 不用裸 JSON 文件：SpringBoard 的沙盒读不了 /var/mobile/Library/Preferences 下的任意新文件
+//   （实测 NSData dataWithContentsOfFile: 返回 nil）。改用 NSUserDefaults 的共享域
+//   `com.szafx.credhud` —— 走 cfprefsd，App 和 SpringBoard 都能读写。
 
 #import <UIKit/UIKit.h>
 #import <Foundation/Foundation.h>
 
-static NSString *const kHUDJSON = @"/var/mobile/Library/Preferences/credpush_hud.json";
+static NSString *const kHUDDomain = @"com.szafx.credhud";
+
+static id HUDValue(NSString *key) {
+    CFPropertyListRef v = CFPreferencesCopyAppValue((__bridge CFStringRef)key,
+                                                    (__bridge CFStringRef)kHUDDomain);
+    return v ? (__bridge_transfer id)v : nil;
+}
 
 #pragma mark - 视图
 
@@ -126,20 +136,16 @@ static NSString *const kHUDJSON = @"/var/mobile/Library/Preferences/credpush_hud
 }
 
 - (void)poll {
-    NSData *d = [NSData dataWithContentsOfFile:kHUDJSON];
-    if (!d) { [self hide]; return; }
-    NSDictionary *j = [NSJSONSerialization JSONObjectWithData:d options:0 error:nil];
-    if (![j isKindOfClass:NSDictionary.class]) { [self hide]; return; }
-    if (![j[@"visible"] boolValue]) { [self hide]; return; }
+    NSNumber *vis = HUDValue(@"visible");
+    if (![vis isKindOfClass:NSNumber.class] || !vis.boolValue) { [self hide]; return; }
+    NSString *title  = HUDValue(@"title");
+    NSString *detail = HUDValue(@"detail");
+    NSInteger step   = [HUDValue(@"step") integerValue];
+    NSInteger total  = [HUDValue(@"total") integerValue] ?: 6;
+    double started   = [HUDValue(@"startedAt") doubleValue];
 
-    NSString *title = [j[@"title"] isKindOfClass:NSString.class] ? j[@"title"] : @"";
-    NSString *detail = [j[@"detail"] isKindOfClass:NSString.class] ? j[@"detail"] : @"";
-    NSInteger step  = [j[@"step"] integerValue];
-    NSInteger total = [j[@"total"] integerValue] ?: 6;
-    double started  = [j[@"startedAt"] doubleValue];
-
-    self.hud.titleLabel.text  = title;
-    self.hud.detailLabel.text = detail;
+    self.hud.titleLabel.text  = [title isKindOfClass:NSString.class] ? title : @"";
+    self.hud.detailLabel.text = [detail isKindOfClass:NSString.class] ? detail : @"";
     self.hud.stepLabel.text   = [NSString stringWithFormat:@"%ld/%ld",
                                  (long)(MIN(step + 1, total)), (long)total];
     self.startedAt = started;
