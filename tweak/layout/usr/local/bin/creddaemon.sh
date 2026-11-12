@@ -85,10 +85,10 @@ while IFS= read -r c; do
     if [ -f "$st" ]; then
         new=$(comm -13 "$st" <(printf '%s\n' "$cur") 2>/dev/null)
     fi
-    printf '%s\n' "$cur" > "$st.tmp" && mv -f "$st.tmp" "$st"
-
-    [ -z "$new" ] && continue
-
+    if [ -z "$new" ]; then
+        printf '%s\n' "$cur" > "$st.tmp" && mv -f "$st.tmp" "$st"
+        continue
+    fi
     # ★ 同一容器 60 秒内只触发一次（防抖动）；**新会话本身不会被吞掉**：
     #   triggered.txt 是按会话 ID 去重的，10 分钟内出现的新会话下一轮照样会触发。
     lt_file="$STATE/$cid.last"
@@ -97,6 +97,9 @@ while IFS= read -r c; do
     if [ $((now - lt)) -lt "$MIN_GAP" ] 2>/dev/null; then
         continue
     fi
+
+    # ★ 冷却过了才把 state 推到最新 —— 冷却期间出现的新会话不能被吞掉，下一轮继续处理
+    printf '%s\n' "$cur" > "$st.tmp" && mv -f "$st.tmp" "$st"
 
     fresh=0
     while IFS= read -r sid; do
@@ -107,8 +110,7 @@ while IFS= read -r c; do
     done <<< "$new"
 
     if [ "$fresh" = "1" ]; then
-        printf '%s
-' "$now" > "$lt_file" 2>/dev/null
+        printf '%s\n' "$now" > "$lt_file" 2>/dev/null
         fire "$cid"
         t=$((t + 1))
     fi
