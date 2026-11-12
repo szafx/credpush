@@ -142,6 +142,9 @@ final class CredViewController: UIViewController {
             var rs: [CredRow] = []
             var onDevice = Set<String>()
             for c in containers {
+                // ★ 只有「真正添加成功」的号才显示：UserPhone 为空 = 没登录完成，
+                //   这些空容器（重复点新增账号留下的）一律不进列表。
+                if c.phone.isEmpty { continue }
                 let sessions = Scanner.readSessions(container: c.path, phone: c.phone)
                 let serverUid = AccountCache.uid[c.phone] ?? ""
                 let hasMatch = !serverUid.isEmpty && sessions.contains { $0.uid == serverUid }
@@ -183,7 +186,7 @@ final class CredViewController: UIViewController {
                 let act = Crane.activeContainerID()
                 for c in Crane.list() where c.id == act { actName = c.name }
             }
-            let nContainers = containers.count
+            let nContainers = containers.filter { !$0.phone.isEmpty }.count
             DispatchQueue.main.async { [weak self] in
                 guard let self = self else { return }
                 self.rows = rs
