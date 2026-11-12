@@ -8,6 +8,9 @@ enum PullRequest {
     /// 待处理的容器 id（容器目录名，如 121753FF-…）。空 = 没有请求。
     private(set) static var pendingContainer: String = ""
 
+    /// 这次 pull 是不是把 App 从后台/冷启动拉起来的？是的话推完要送回中国移动。
+    static var returnToChinaMobile = false
+
     /// 处理一个 URL；不是我们的就返回 false。
     @discardableResult
     static func handle(_ url: URL) -> Bool {

@@ -18,6 +18,8 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         window = w
         // 冷启动时如果是被 creddaemon 的 credpush://pull 拉起来的
         if let u = launchOptions?[.url] as? URL, PullRequest.handle(u) {
+            // 冷启动就是被 daemon 拉起来的：推完要把用户送回中国移动
+            PullRequest.returnToChinaMobile = true
             (w.rootViewController as? UITabBarController)?.selectedIndex = 1
         }
         return true
@@ -27,6 +29,9 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
     func application(_ app: UIApplication, open url: URL,
                      options: [UIApplication.OpenURLOptionsKey: Any] = [:]) -> Bool {
         guard PullRequest.handle(url) else { return false }
+        // 只有「本来不在前台、被 URL 拉起来」才在推完后送回中国移动；
+        // 用户本来就在用移动工具集时不要把他拽走
+        PullRequest.returnToChinaMobile = (app.applicationState != .active)
         (window?.rootViewController as? UITabBarController)?.selectedIndex = 1
         return true
     }

@@ -22,6 +22,8 @@ final class CredViewController: UIViewController {
     private var containerCount = 0
     private var scanning = false
     private var busy = false
+    /// 最近一次推送成功的时间（守护进程触发的 pull 要去重，避免同一登录被推两次）
+    private var lastPushOK: TimeInterval = 0
 
     // MARK: - UI
 
@@ -86,6 +88,19 @@ final class CredViewController: UIViewController {
 
     /// 守护进程（creddaemon）发现新会话 → 拉起 App 补抓
     @objc private func handlePullRequest() {
+        let now = Date().timeIntervalSince1970
+        // 刚推过（比如用户自己点的「重新获取」刚刚推成功）：别再推一次 —— 连续换票可能互相顶号
+        if now - lastPushOK < 60 {
+            _ = PullRequest.take()
+            finishPull()
+            return
+        }
+        // 用户自己发起的流程正在跑：那条路自己会推、自己会杀掉中国移动回到本 App，别插手
+        if Reacquire.shared.isRunning || Reacquire.shared.hasPending {
+            _ = PullRequest.take()
+            PullRequest.returnToChinaMobile = false
+            return
+        }
         AccountCache.updated = nil
         if scanning {
             // 正在扫：等这一轮结束再来一次（pendingContainer 还在，下一轮 take 走）
@@ -216,24 +231,26 @@ final class CredViewController: UIViewController {
                     : "扫描完成 · \(nContainers) 个容器 · \(t)"
                 self.render()
 
-                // ★ creddaemon 触发的补抓：扫完就把该容器里能用的会话整批推掉
-                //   （状态门控沿用现有逻辑：只有「会话已更新 / 登录已过期」才推，
-                //    正常的号不动 —— 免得每次冷启动都白推一次、还撞服务端风控）
+                // ★ creddaemon 触发的补抓：扫完就把该容器的会话整批推掉
+                //   （**不按状态门控** —— 中国移动冷启动会顶掉旧会话，而服务端要等下一轮续期
+                //    失败才知道，这时按状态判断会压掉唯一能救回凭证的推送）
                 let want = PullRequest.take()
                 if !want.isEmpty {
                     let hit = self.rows.filter {
                         !$0.container.isEmpty
                             && ($0.container as NSString).lastPathComponent == want
                     }
-                    if hit.isEmpty {
-                        self.statusLabel.text = "守护进程已触发，但没找到该容器（可点「重新扫描」）"
+                    let sessions = hit.flatMap { $0.sessions }
+                    if sessions.isEmpty {
+                        self.statusLabel.text = "守护进程已触发，但该容器没有可推的会话"
+                        self.finishPull()
                     } else {
                         // ★ 无条件推整批：中国移动**冷启动就会换发新会话并把旧的顶掉**
                         //   （实测 2026-11-12 21:45 打开中国移动 → 21:56 续期失败）。
                         //   这时服务端还以为旧会话活着（要等下一轮续期失败才知道），
                         //   所以不能按状态门控 —— 否则会压掉唯一能救回凭证的那次推送。
-                        for r in hit where !r.sessions.isEmpty {
-                            self.pushSessions(r.sessions, allowNew: false)
+                        self.pushSessions(sessions, allowNew: false) { _ in
+                            self.finishPull()
                         }
                     }
                 }
@@ -267,6 +284,18 @@ final class CredViewController: UIViewController {
         stack.addArrangedSubview(daemonCard())
         stack.addArrangedSubview(statusLabel)
         stack.addArrangedSubview(actionBar())
+    }
+
+    /// 守护进程触发的补抓处理完了：如果 App 是被它从后台/冷启动拉起来的，
+    /// 就把用户**送回中国移动**（不杀它）。
+    /// ★ 用户自己点「重新获取 / 新增账号」走的不是这条路 —— 那条在 Reacquire 里
+    ///   成功后是「杀掉中国移动 + 回到本 App」，保持原样。
+    private func finishPull() {
+        guard PullRequest.returnToChinaMobile else { return }
+        PullRequest.returnToChinaMobile = false
+        if Crane.available() {
+            Crane.run(Crane.uiopen, ["--bundleid", Crane.appBundle], timeout: 8)
+        }
     }
 
     /// 越狱看门狗 creddaemon 的心跳（装在越狱机上才有）。
@@ -633,6 +662,7 @@ final class CredViewController: UIViewController {
                         let nick = (it["nick"] as? String) ?? (it["phone"] as? String) ?? "?"
                         AppLog.w("push | \(nick) \(it["ok"] as? Bool == true ? "OK" : "FAIL") \((it["msg"] as? String) ?? "")")
                     }
+                    if okN > 0 { self.lastPushOK = Date().timeIntervalSince1970 }
                     self.statusLabel.text = okN > 0 ? "已更新 \(okN) 个号" : "服务端没有接受"
                     self.toast(okN > 0 ? "已更新 \(okN) 个号" : "没有更新", ok: okN > 0)
                     // ★ 全部步骤结束（成功/失败都算任务收尾）：这时才收浮窗
