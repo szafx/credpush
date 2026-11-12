@@ -410,10 +410,27 @@ final class CredViewController: UIViewController {
         guard let ph = sender.accessibilityIdentifier, let r = row(phone: ph) else { return }
         let masked = ph.count >= 7 ? String(ph.suffix(4)) : ph
         confirm("重新获取 \(masked)",
-                "会切到该号的 Crane 容器、打开中国移动等它登录，拿到凭证后自动关闭并推送。") { [weak self] in
-            self?.runFlow(name: ph, container: r.container,
-                          known: Set(r.sessions.map { $0.uid }), createIfMissing: false,
-                          title: "重新获取 \(masked)")
+                "会先把容器里现有的会话再推一遍；如果都不行，再切到该号的 Crane 容器、打开中国移动等你登录，拿到新凭证后自动关闭并推送。") { [weak self] in
+            guard let self = self else { return }
+            let startFlow = {
+                self.runFlow(name: ph, container: r.container,
+                             known: Set(r.sessions.map { $0.uid }), createIfMissing: false,
+                             title: "重新获取 \(masked)")
+            }
+            // ★ 先重推现有会话（含最新的那条）：195 这种「服务端说过期、但容器里其实有一条还能用」
+            //   的情况，以前只能靠用户再登录一次；现在一次点击就能重试。
+            if r.sessions.isEmpty {
+                startFlow()
+            } else {
+                self.pushSessions(r.sessions, allowNew: false) { ok in
+                    if ok {
+                        self.toast("已用现有会话重新推送成功", ok: true)
+                        self.scan()
+                    } else {
+                        startFlow()
+                    }
+                }
+            }
         }
     }
 
@@ -503,10 +520,17 @@ final class CredViewController: UIViewController {
         }
     }
 
-    private func pushSessions(_ sessions: [FoundSession], allowNew: Bool) {
-        guard !busy else { return }
+    private func pushSessions(_ sessions: [FoundSession], allowNew: Bool,
+                              completion: ((Bool) -> Void)? = nil) {
+        // ★ busy 时不要静默丢弃：调用方（比如「重新获取」的前置重推）要靠回调决定下一步
+        guard !busy else {
+            toast("正在推送中，请稍候", ok: false)
+            completion?(false)
+            return
+        }
         guard !sessions.isEmpty else {
             toast("没有可推送的会话", ok: false)
+            completion?(false)
             return
         }
         busy = true
@@ -529,6 +553,7 @@ final class CredViewController: UIViewController {
                     self.statusLabel.text = "推送失败：\(e.localizedDescription)"
                     self.toast("推送失败", ok: false)
                     LiveProgress.shared.end("结束")
+                    completion?(false)
                 case .success(let obj):
                     let d = obj as? [String: Any] ?? [:]
                     let items = d["items"] as? [[String: Any]] ?? []
@@ -542,6 +567,7 @@ final class CredViewController: UIViewController {
                     self.toast(okN > 0 ? "已更新 \(okN) 个号" : "没有更新", ok: okN > 0)
                     // ★ 全部步骤结束（成功/失败都算任务收尾）：这时才收浮窗
                     LiveProgress.shared.end(okN > 0 ? "已完成" : "结束")
+                    completion?(okN > 0)
                 }
                 // 重新拉一次服务端状态
                 AccountCache.updated = nil
