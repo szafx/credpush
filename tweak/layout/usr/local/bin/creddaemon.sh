@@ -19,6 +19,7 @@ HB="$DIR/heartbeat.json"
 TRIG="$DIR/triggered.txt"
 
 DRY="${CREDDAEMON_DRY:-0}"
+MIN_GAP="${CREDDAEMON_MIN_GAP:-600}"   # 同一个容器最短触发间隔（秒）——别反复换票把自己顶掉
 
 mkdir -p "$STATE" 2>/dev/null
 
@@ -88,6 +89,14 @@ while IFS= read -r c; do
 
     [ -z "$new" ] && continue
 
+    # ★ 同一容器最短 10 分钟才触发一次：连续换票会让服务端判「登录状态已过期」
+    lt_file="$STATE/$cid.last"
+    lt=0
+    [ -f "$lt_file" ] && lt=$(cat "$lt_file" 2>/dev/null || echo 0)
+    if [ $((now - lt)) -lt "$MIN_GAP" ] 2>/dev/null; then
+        continue
+    fi
+
     fresh=0
     while IFS= read -r sid; do
         [ -z "$sid" ] && continue
@@ -97,6 +106,8 @@ while IFS= read -r c; do
     done <<< "$new"
 
     if [ "$fresh" = "1" ]; then
+        printf '%s
+' "$now" > "$lt_file" 2>/dev/null
         fire "$cid"
         t=$((t + 1))
     fi

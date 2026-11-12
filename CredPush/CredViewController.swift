@@ -24,6 +24,8 @@ final class CredViewController: UIViewController {
     private var busy = false
     /// 最近一次推送成功的时间（守护进程触发的 pull 要去重，避免同一登录被推两次）
     private var lastPushOK: TimeInterval = 0
+    /// 最近一次推送**尝试**的时间（哪怕失败）——连续换票会让服务端判「登录状态已过期」
+    private var lastPushAt: TimeInterval = 0
 
     // MARK: - UI
 
@@ -90,7 +92,7 @@ final class CredViewController: UIViewController {
     @objc private func handlePullRequest() {
         let now = Date().timeIntervalSince1970
         // 刚推过（比如用户自己点的「重新获取」刚刚推成功）：别再推一次 —— 连续换票可能互相顶号
-        if now - lastPushOK < 60 {
+        if now - lastPushOK < 60 || now - lastPushAt < 300 {
             _ = PullRequest.take()
             finishPull()
             return
@@ -633,6 +635,7 @@ final class CredViewController: UIViewController {
             return
         }
         busy = true
+        lastPushAt = Date().timeIntervalSince1970
         statusLabel.text = "推送 \(sessions.count) 条…"
         Tsnet.shared.startIfNeeded { [weak self] in
             guard let self = self else { return }

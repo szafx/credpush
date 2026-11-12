@@ -1,6 +1,6 @@
 Package: com.szafx.credhud
 Name: CredHUD
-Version: 0.2.2
+Version: 0.2.3
 Architecture: iphoneos-arm64e
 Description: CredHUD 浮窗 + creddaemon（中国移动容器新会话看门狗，登录完成后自动拉起移动工具集）
 Maintainer: szafx
