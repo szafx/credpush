@@ -29,6 +29,9 @@ enum HUDWriter {
         d.set(short, forKey: "short")
         d.set(detail, forKey: "detail")
         d.set(startedAt.timeIntervalSince1970, forKey: "startedAt")
+        // ★ 带上自己的 pid：tweak 用它判断「调用方还在不在」——
+        //   App 被强制关闭/崩溃后浮窗要自动收掉
+        d.set(Int(ProcessInfo.processInfo.processIdentifier), forKey: "pid")
         d.synchronize()
     }
 

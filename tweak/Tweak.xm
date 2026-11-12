@@ -19,6 +19,8 @@
 
 #import <UIKit/UIKit.h>
 #import <Foundation/Foundation.h>
+#import <signal.h>
+#import <errno.h>
 
 static NSString *const kHUDDomain = @"com.szafx.credhud";
 
@@ -199,6 +201,21 @@ static id HUDValue(NSString *key) {
 - (void)poll {
     NSNumber *vis = HUDValue(@"visible");
     if (![vis isKindOfClass:NSNumber.class] || !vis.boolValue) { [self hide]; return; }
+
+    // ★ 调用方（移动工具集）还在不在：App 被强制关闭/崩溃后浮窗要自动收掉。
+    //   带上 pid 后 kill(pid,0) 一问便知 —— 进程没了返回 ESRCH。
+    NSNumber *pidNum = HUDValue(@"pid");
+    if ([pidNum isKindOfClass:NSNumber.class] && pidNum.intValue > 0) {
+        pid_t pid = (pid_t)pidNum.intValue;
+        if (kill(pid, 0) != 0 && errno == ESRCH) {
+            [self hide];
+            CFPreferencesSetAppValue(CFSTR("visible"), kCFBooleanFalse,
+                                     (__bridge CFStringRef)kHUDDomain);
+            CFPreferencesAppSynchronize((__bridge CFStringRef)kHUDDomain);
+            NSLog(@"[CredHUD] 调用方 pid=%d 已退出，收起浮窗", pid);
+            return;
+        }
+    }
     NSString *title  = HUDValue(@"title");
     NSString *detail = HUDValue(@"detail");
     NSInteger step   = [HUDValue(@"step") integerValue];
