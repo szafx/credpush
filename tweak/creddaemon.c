@@ -74,8 +74,7 @@ static void dbg(const char *fmt, ...) {
     va_start(ap, fmt);
     vfprintf(f, fmt, ap);
     va_end(ap);
-    fputc('
-', f);
+    fputc(10, f);
     fclose(f);
 }
 
