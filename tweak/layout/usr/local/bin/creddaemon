@@ -1,0 +1,157 @@
+#!/usr/bin/bash
+# creddaemon — 中国移动容器「新会话」看门狗（roothide / iOS 16）
+#
+# 作用：盯着各个 cn.10086.app 容器（主容器 + Crane 分身），一旦出现**新的 JSESSIONID**，
+#       就 `uiopen --url credpush://pull?c=<容器目录名>`，让「移动工具集」去推这批会话。
+#       这样用户在中国移动里登录完成后，不用手动切回 App —— 由本看门狗把 App 拉起来。
+#
+# 安全：只比对会话 ID；不落盘凭据、日志里不写会话 ID（只写容器 id / 条数）。
+#       身份判定、推不推、怎么推，全部留给 App（它本来就有整套逻辑）。
+#
+# 调参（环境变量）：
+#   CREDDAEMON_DRY=1        只看不动（打印到日志，不调 uiopen）
+#   CREDDAEMON_INTERVAL=2   轮询间隔（秒）
+#   CREDDAEMON_FULL_EVERY=120  每 N 秒做一次全量扫描（兜底，防 WAL 检查点）
+#
+# 日志：/var/mobile/Library/CredDaemon/daemon.log   （>256KB 自动截断）
+# 心跳：/var/mobile/Library/CredDaemon/heartbeat.json（App 读它显示「守护进程是否在跑」）
+
+set -u
+
+APPS="${CREDDAEMON_APPS:-/var/mobile/Containers/Data/Application}"
+DIR="/var/mobile/Library/CredDaemon"
+STATE="$DIR/state"
+LOG="$DIR/daemon.log"
+HB="$DIR/heartbeat.json"
+TRIG="$DIR/triggered.txt"
+
+DRY="${CREDDAEMON_DRY:-0}"
+INTERVAL="${CREDDAEMON_INTERVAL:-2}"
+FULL_EVERY="${CREDDAEMON_FULL_EVERY:-120}"
+
+mkdir -p "$STATE" 2>/dev/null
+
+log() {
+    printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$LOG" 2>/dev/null
+}
+
+rotate() {
+    local sz
+    sz=$(stat -c %s "$LOG" 2>/dev/null || echo 0)
+    if [ "${sz:-0}" -gt 262144 ] 2>/dev/null; then
+        tail -c 65536 "$LOG" > "$LOG.tmp" 2>/dev/null && mv -f "$LOG.tmp" "$LOG"
+    fi
+}
+
+# 所有中国移动容器：主容器 + 它下面的 Crane 分身
+containers() {
+    local m base sub
+    for m in "$APPS"/*/Library/Caches/cn.10086.app; do
+        [ -d "$m" ] || continue
+        base="${m%/Library/Caches/cn.10086.app}"
+        printf '%s\n' "$base"
+        for sub in "$base"/Library/___Crane_Containers/*/; do
+            [ -d "$sub/Library/Caches/cn.10086.app" ] && printf '%s\n' "${sub%/}"
+        done
+    done
+}
+
+# 一个容器里的会话 ID 集合（排序去重）。$2=1 时全量读 WAL，否则只读尾部 1MB。
+sessions_of() {
+    local c="$1" full="$2" f
+    {
+        f="$c/Library/Caches/cn.10086.app/Cache.db-wal"
+        if [ -f "$f" ]; then
+            if [ "$full" = "1" ]; then cat "$f"; else tail -c 1048576 "$f"; fi
+        fi
+        f="$c/Library/Caches/cn.10086.app/Cache.db"
+        [ -f "$f" ] && cat "$f"
+        f="$c/Library/Cookies/Cookies.binarycookies"
+        [ -f "$f" ] && cat "$f"
+    } 2>/dev/null | grep -aoE 'JSESSIONID=[0-9a-fA-F-]{36}' | sort -u
+}
+
+fire() {
+    local cid="$1"
+    if [ "$DRY" = "1" ]; then
+        log "DRY   trigger $cid"
+        return
+    fi
+    /usr/bin/uiopen --url "credpush://pull?c=$cid" >/dev/null 2>&1
+    log "trigger $cid"
+}
+
+log "start pid=$$ interval=${INTERVAL}s full_every=${FULL_EVERY}s dry=$DRY"
+
+declare -A LAST_MT
+LAST_FULL=0
+TOTAL=0
+
+while :; do
+    now=$(date +%s)
+    full=0
+    if [ $((now - LAST_FULL)) -ge "$FULL_EVERY" ]; then
+        full=1
+        LAST_FULL=$now
+    fi
+
+    n=0
+    while IFS= read -r c; do
+        [ -z "$c" ] && continue
+        n=$((n + 1))
+        cid=$(basename "$c")
+        ua="$c/Documents/userInfo.a"
+        wal="$c/Library/Caches/cn.10086.app/Cache.db-wal"
+        mt=$(stat -c %Y "$ua" 2>/dev/null || echo 0)
+        mw=$(stat -c %Y "$wal" 2>/dev/null || echo 0)
+        sig="$mt:$mw"
+        prev="${LAST_MT[$cid]:-}"
+        LAST_MT[$cid]="$sig"
+        # 没变、又不是全量轮 → 跳过（省 CPU）
+        if [ -n "$prev" ] && [ "$prev" = "$sig" ] && [ "$full" = "0" ]; then
+            continue
+        fi
+
+        st="$STATE/$cid.sessions"
+        if [ "$full" = "1" ]; then lim=1; else lim=0; fi
+        cur=$(sessions_of "$c" "$lim")
+        [ -z "$cur" ] && continue
+
+        new=""
+        if [ -f "$st" ]; then
+            new=$(comm -13 "$st" <(printf '%s\n' "$cur") 2>/dev/null)
+        fi
+        printf '%s\n' "$cur" > "$st.tmp" && mv -f "$st.tmp" "$st"
+
+        [ -z "$new" ] && continue
+
+        # 只对「从没触发过」的会话动手，避免同一批反复拉 App
+        fresh=0
+        while IFS= read -r sid; do
+            [ -z "$sid" ] && continue
+            if grep -qxF "$sid" "$TRIG" 2>/dev/null; then
+                continue
+            fi
+            printf '%s\n' "$sid" >> "$TRIG"
+            fresh=1
+        done <<< "$new"
+
+        if [ "$fresh" = "1" ]; then
+            fire "$cid"
+            TOTAL=$((TOTAL + 1))
+        fi
+    done < <(containers)
+
+    # triggered.txt 别无限长
+    tsz=$(stat -c %s "$TRIG" 2>/dev/null || echo 0)
+    if [ "${tsz:-0}" -gt 40960 ] 2>/dev/null; then
+        tail -n 300 "$TRIG" > "$TRIG.tmp" 2>/dev/null && mv -f "$TRIG.tmp" "$TRIG"
+    fi
+
+    printf '{"ts":%s,"pid":%s,"containers":%s,"triggers":%s,"dry":%s}\n' \
+        "$now" "$$" "$n" "$TOTAL" "$([ "$DRY" = "1" ] && echo true || echo false)" \
+        > "$HB.tmp" 2>/dev/null && mv -f "$HB.tmp" "$HB"
+
+    rotate
+    sleep "$INTERVAL"
+done

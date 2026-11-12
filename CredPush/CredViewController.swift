@@ -61,6 +61,9 @@ final class CredViewController: UIViewController {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
         NotificationCenter.default.addObserver(self, selector: #selector(handleBecameActive),
                                                name: Notification.Name("AppBecameActive"), object: nil)
+        // ★ 越狱看门狗 creddaemon 拉起来的补抓请求（credpush://pull）
+        NotificationCenter.default.addObserver(self, selector: #selector(handlePullRequest),
+                                               name: PullRequest.changed, object: nil)
         renderLoading()
         scan()
     }
@@ -79,6 +82,19 @@ final class CredViewController: UIViewController {
     @objc private func handleBecameActive() {
         resumePendingIfAny()
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.scan() }
+    }
+
+    /// 守护进程（creddaemon）发现新会话 → 拉起 App 补抓
+    @objc private func handlePullRequest() {
+        AccountCache.updated = nil
+        if scanning {
+            // 正在扫：等这一轮结束再来一次（pendingContainer 还在，下一轮 take 走）
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                self?.handlePullRequest()
+            }
+        } else {
+            scan()
+        }
     }
 
     /// 上次没等到凭证的：回前台立刻试一次，不行就每 2 秒重试（最多 60 秒）
@@ -199,6 +215,24 @@ final class CredViewController: UIViewController {
                     ? "没有找到中国移动的容器（检查权限或 App 是否安装）"
                     : "扫描完成 · \(nContainers) 个容器 · \(t)"
                 self.render()
+
+                // ★ creddaemon 触发的补抓：扫完就把该容器里能用的会话整批推掉
+                //   （状态门控沿用现有逻辑：只有「会话已更新 / 登录已过期」才推，
+                //    正常的号不动 —— 免得每次冷启动都白推一次、还撞服务端风控）
+                let want = PullRequest.take()
+                if !want.isEmpty {
+                    let hit = self.rows.filter {
+                        !$0.container.isEmpty
+                            && ($0.container as NSString).lastPathComponent == want
+                    }
+                    if hit.isEmpty {
+                        self.statusLabel.text = "守护进程已触发，但没找到该容器（可点「重新扫描」）"
+                    } else {
+                        for r in hit where r.status == .changed || r.status == .expired {
+                            self.pushSessions(r.sessions, allowNew: false)
+                        }
+                    }
+                }
             }
         }
     }
@@ -226,8 +260,40 @@ final class CredViewController: UIViewController {
             for r in rows { stack.addArrangedSubview(rowCard(r)) }
         }
 
+        stack.addArrangedSubview(daemonCard())
         stack.addArrangedSubview(statusLabel)
         stack.addArrangedSubview(actionBar())
+    }
+
+    /// 越狱看门狗 creddaemon 的心跳（装在越狱机上才有）。
+    /// 目的是让「守护进程静默死掉」这件事**看得见**，而不是等用户发现登录后没自动推。
+    private func daemonCard() -> UIView {
+        let p = "/var/mobile/Library/CredDaemon/heartbeat.json"
+        var text = "凭证守护：未安装 / 未运行 —— 在中国移动登录后需要手动切回 App"
+        var color = Theme.red
+        if let d = try? Data(contentsOf: URL(fileURLWithPath: p)),
+           let o = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any],
+           let ts = (o["ts"] as? NSNumber)?.doubleValue {
+            let age = Date().timeIntervalSince1970 - ts
+            let total = (o["triggers"] as? NSNumber)?.intValue ?? 0
+            if age <= 120 {
+                text = "凭证守护：正常（\(Int(age)) 秒前心跳 · 本次已触发 \(total) 次）"
+                color = Theme.green
+            } else {
+                text = "凭证守护：⚠️ 已 \(Int(age / 60)) 分钟没有心跳 —— 登录后需要手动切回 App"
+            }
+        }
+        let v = Theme.card(14)
+        let l = Theme.label(text, size: 12, color: color, lines: 0)
+        v.addSubview(l)
+        l.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            l.topAnchor.constraint(equalTo: v.layoutMarginsGuide.topAnchor),
+            l.bottomAnchor.constraint(equalTo: v.layoutMarginsGuide.bottomAnchor),
+            l.leadingAnchor.constraint(equalTo: v.layoutMarginsGuide.leadingAnchor),
+            l.trailingAnchor.constraint(equalTo: v.layoutMarginsGuide.trailingAnchor),
+        ])
+        return v
     }
 
     private func activeContainerCard() -> UIView {

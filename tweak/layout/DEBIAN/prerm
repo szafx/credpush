@@ -1,0 +1,11 @@
+#!/usr/bin/bash
+# 卸载前：停掉守护进程
+set -u
+JB=/var/jb
+[ -d "$JB" ] || JB=""
+PLIST="$JB/Library/LaunchDaemons/com.szafx.creddaemon.plist"
+LCTL="$JB/bin/launchctl"
+[ -x "$LCTL" ] || LCTL=/usr/bin/launchctl
+"$LCTL" bootout system "$PLIST" >/dev/null 2>&1
+"$LCTL" unload "$PLIST" >/dev/null 2>&1
+exit 0

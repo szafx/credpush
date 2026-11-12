@@ -1,8 +1,8 @@
 Package: com.szafx.credhud
 Name: CredHUD
-Version: 0.1.0
+Version: 0.2.0
 Architecture: iphoneos-arm64e
-Description: Floating progress HUD for 移动工具集 (CredPush)
+Description: CredHUD 浮窗 + creddaemon（中国移动容器新会话看门狗，登录完成后自动拉起移动工具集）
 Maintainer: szafx
 Author: szafx
 Section: Tweaks

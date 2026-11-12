@@ -1,0 +1,31 @@
+#!/usr/bin/bash
+# 安装后：建状态目录、起守护进程
+set -u
+JB=/var/jb
+[ -d "$JB" ] || JB=""
+
+chmod 755 "$JB/usr/local/bin/creddaemon" 2>/dev/null
+chmod 644 "$JB/Library/LaunchDaemons/com.szafx.creddaemon.plist" 2>/dev/null
+
+mkdir -p /var/mobile/Library/CredDaemon/state 2>/dev/null
+chmod 755 /var/mobile/Library/CredDaemon /var/mobile/Library/CredDaemon/state 2>/dev/null
+
+PLIST="$JB/Library/LaunchDaemons/com.szafx.creddaemon.plist"
+LCTL="$JB/bin/launchctl"
+[ -x "$LCTL" ] || LCTL=/usr/bin/launchctl
+
+# 先卸载旧的，再加载
+"$LCTL" bootout system "$PLIST" >/dev/null 2>&1
+"$LCTL" bootstrap system "$PLIST" >/dev/null 2>&1
+if [ $? -ne 0 ]; then
+    "$LCTL" unload "$PLIST" >/dev/null 2>&1
+    "$LCTL" load -w "$PLIST" >/dev/null 2>&1
+fi
+
+sleep 1
+if [ -f /var/mobile/Library/CredDaemon/heartbeat.json ]; then
+    echo "creddaemon: 已启动（心跳已写入）"
+else
+    echo "creddaemon: 已加载，但还没有心跳 —— 检查 /var/mobile/Library/CredDaemon/stderr.log"
+fi
+exit 0

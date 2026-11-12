@@ -16,6 +16,18 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         w.rootViewController = AppDelegate.makeRoot()
         w.makeKeyAndVisible()
         window = w
+        // 冷启动时如果是被 creddaemon 的 credpush://pull 拉起来的
+        if let u = launchOptions?[.url] as? URL, PullRequest.handle(u) {
+            (w.rootViewController as? UITabBarController)?.selectedIndex = 1
+        }
+        return true
+    }
+
+    /// 越狱看门狗（creddaemon）拉起：credpush://pull?c=<容器id>
+    func application(_ app: UIApplication, open url: URL,
+                     options: [UIApplication.OpenURLOptionsKey: Any] = [:]) -> Bool {
+        guard PullRequest.handle(url) else { return false }
+        (window?.rootViewController as? UITabBarController)?.selectedIndex = 1
         return true
     }
 
