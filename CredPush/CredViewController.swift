@@ -22,10 +22,11 @@ final class CredViewController: UIViewController {
     private var containerCount = 0
     private var scanning = false
     private var busy = false
-    /// 最近一次推送成功的时间（守护进程触发的 pull 要去重，避免同一登录被推两次）
-    private var lastPushOK: TimeInterval = 0
-    /// 最近一次推送**尝试**的时间（哪怕失败）——连续换票会让服务端判「登录状态已过期」
+    /// 最近一次推送**尝试**的时间（哪怕失败）
     private var lastPushAt: TimeInterval = 0
+    /// 最近一次推的那条会话（uid 拼起来的 key）——冷却按**会话**算，不是按时间一刀切：
+    /// 10 分钟内如果中国移动又换发了新会话，照样要推。
+    private var lastPushedKey: String = ""
 
     // MARK: - UI
 
@@ -90,13 +91,6 @@ final class CredViewController: UIViewController {
 
     /// 守护进程（creddaemon）发现新会话 → 拉起 App 补抓
     @objc private func handlePullRequest() {
-        let now = Date().timeIntervalSince1970
-        // 刚推过（比如用户自己点的「重新获取」刚刚推成功）：别再推一次 —— 连续换票可能互相顶号
-        if now - lastPushOK < 60 || now - lastPushAt < 300 {
-            _ = PullRequest.take()
-            finishPull()
-            return
-        }
         // 用户自己发起的流程正在跑：那条路自己会推、自己会杀掉中国移动回到本 App，别插手
         if Reacquire.shared.isRunning || Reacquire.shared.hasPending {
             _ = PullRequest.take()
@@ -245,8 +239,16 @@ final class CredViewController: UIViewController {
                     let sessions = hit.flatMap { $0.sessions }
                     if let newest = self.newestSession(sessions) {
                         // ★ 只推最新那条（整批会把有效的连坐）
-                        self.pushSessions([newest], allowNew: false) { _ in
+                        //   去重按**会话**：同一条 5 分钟内推过才跳过；出现新会话照推。
+                        let key = newest.uid
+                        let now = Date().timeIntervalSince1970
+                        if key == self.lastPushedKey && now - self.lastPushAt < 300 {
+                            self.statusLabel.text = "这条会话刚推过，跳过"
                             self.finishPull()
+                        } else {
+                            self.pushSessions([newest], allowNew: false) { _ in
+                                self.finishPull()
+                            }
                         }
                     } else {
                         self.statusLabel.text = "守护进程已触发，但该容器没有可推的会话"
@@ -646,6 +648,7 @@ final class CredViewController: UIViewController {
         }
         busy = true
         lastPushAt = Date().timeIntervalSince1970
+        lastPushedKey = sessions.map { $0.uid }.sorted().joined(separator: ",")
         statusLabel.text = "推送 \(sessions.count) 条…"
         Tsnet.shared.startIfNeeded { [weak self] in
             guard let self = self else { return }
@@ -675,7 +678,6 @@ final class CredViewController: UIViewController {
                         let nick = (it["nick"] as? String) ?? (it["phone"] as? String) ?? "?"
                         AppLog.w("push | \(nick) \(it["ok"] as? Bool == true ? "OK" : "FAIL") \((it["msg"] as? String) ?? "")")
                     }
-                    if okN > 0 { self.lastPushOK = Date().timeIntervalSince1970 }
                     self.statusLabel.text = okN > 0 ? "已更新 \(okN) 个号" : "服务端没有接受"
                     self.toast(okN > 0 ? "已更新 \(okN) 个号" : "没有更新", ok: okN > 0)
                     // ★ 全部步骤结束（成功/失败都算任务收尾）：这时才收浮窗

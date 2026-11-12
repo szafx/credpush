@@ -19,7 +19,7 @@ HB="$DIR/heartbeat.json"
 TRIG="$DIR/triggered.txt"
 
 DRY="${CREDDAEMON_DRY:-0}"
-MIN_GAP="${CREDDAEMON_MIN_GAP:-600}"   # 同一个容器最短触发间隔（秒）——别反复换票把自己顶掉
+MIN_GAP="${CREDDAEMON_MIN_GAP:-60}"    # 同一个容器最短触发间隔（秒，只防事件风暴；真正的去重靠 triggered.txt 按会话）
 
 mkdir -p "$STATE" 2>/dev/null
 
@@ -89,7 +89,8 @@ while IFS= read -r c; do
 
     [ -z "$new" ] && continue
 
-    # ★ 同一容器最短 10 分钟才触发一次：连续换票会让服务端判「登录状态已过期」
+    # ★ 同一容器 60 秒内只触发一次（防抖动）；**新会话本身不会被吞掉**：
+    #   triggered.txt 是按会话 ID 去重的，10 分钟内出现的新会话下一轮照样会触发。
     lt_file="$STATE/$cid.last"
     lt=0
     [ -f "$lt_file" ] && lt=$(cat "$lt_file" 2>/dev/null || echo 0)
