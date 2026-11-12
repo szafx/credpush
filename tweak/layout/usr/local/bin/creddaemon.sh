@@ -17,6 +17,7 @@ STATE="$DIR/state"
 LOG="$DIR/daemon.log"
 HB="$DIR/heartbeat.json"
 TRIG="$DIR/triggered.txt"
+WANTED="$DIR/wanted.json"   # App 扫描后写的「当前需要补凭证的容器」列表
 
 DRY="${CREDDAEMON_DRY:-0}"
 
@@ -87,6 +88,13 @@ while IFS= read -r c; do
     printf '%s\n' "$cur" > "$st.tmp" && mv -f "$st.tmp" "$st"
 
     [ -z "$new" ] && continue
+
+    # ★ 只有 App 明确说「这个容器现在需要补凭证」才拉它起来。
+    #   否则光打开中国移动（冷启动会生成一个 JSESSIONID）就会把 App 拽到前台 —— 太吵。
+    #   文件不存在时（App 还没跑过）退回旧行为：一律触发。
+    if [ -f "$WANTED" ] && ! grep -q "\"$cid\"" "$WANTED" 2>/dev/null; then
+        continue
+    fi
 
     fresh=0
     while IFS= read -r sid; do

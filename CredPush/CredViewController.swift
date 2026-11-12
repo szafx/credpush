@@ -215,6 +215,7 @@ final class CredViewController: UIViewController {
                     ? "没有找到中国移动的容器（检查权限或 App 是否安装）"
                     : "扫描完成 · \(nContainers) 个容器 · \(t)"
                 self.render()
+                self.writeWantedContainers()
 
                 // ★ creddaemon 触发的补抓：扫完就把该容器里能用的会话整批推掉
                 //   （状态门控沿用现有逻辑：只有「会话已更新 / 登录已过期」才推，
@@ -263,6 +264,24 @@ final class CredViewController: UIViewController {
         stack.addArrangedSubview(daemonCard())
         stack.addArrangedSubview(statusLabel)
         stack.addArrangedSubview(actionBar())
+    }
+
+    /// 告诉越狱看门狗（creddaemon）：哪些容器**现在真的需要补凭证**。
+    /// 它只会为这些容器拉起 App —— 否则光打开中国移动（冷启动就会生成一个 JSESSIONID）
+    /// 就会把 App 拽到前台，太吵。（2026-11-12 实测：打开中国移动 = 新会话）
+    private func writeWantedContainers() {
+        let list = rows.filter {
+            !$0.container.isEmpty &&
+            ($0.status == .changed || $0.status == .expired || $0.status == .noSession)
+        }.map { ($0.container as NSString).lastPathComponent }
+        let obj: [String: Any] = [
+            "ts": Int(Date().timeIntervalSince1970),
+            "containers": list,
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: obj) else { return }
+        let dir = "/var/mobile/Library/CredDaemon"
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        try? data.write(to: URL(fileURLWithPath: dir + "/wanted.json"))
     }
 
     /// 越狱看门狗 creddaemon 的心跳（装在越狱机上才有）。
