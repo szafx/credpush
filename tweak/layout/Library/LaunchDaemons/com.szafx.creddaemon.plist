@@ -6,12 +6,13 @@
 	<string>com.szafx.creddaemon</string>
 	<key>ProgramArguments</key>
 	<array>
-		<string>/var/jb/usr/local/bin/creddaemon</string>
+		<string>/var/jb/usr/bin/bash</string>
+		<string>/var/jb/usr/local/bin/creddaemon.sh</string>
 	</array>
 	<key>RunAtLoad</key>
 	<true/>
-	<key>KeepAlive</key>
-	<true/>
+	<key>StartInterval</key>
+	<integer>20</integer>
 	<key>ThrottleInterval</key>
 	<integer>5</integer>
 	<key>UserName</key>

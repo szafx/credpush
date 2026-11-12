@@ -1,20 +1,17 @@
 #!/usr/bin/bash
-# 安装后：建状态目录、起守护进程
+# 安装后：建状态目录、起看门狗
 set -u
 JB=/var/jb
 [ -d "$JB" ] || JB=""
 
-chmod 755 "$JB/usr/local/bin/creddaemon" 2>/dev/null
-# ★ 双保险：用设备自带的 ldid 再签一次（必须带 platform-application，否则 exec 会被 SIGKILL）
-LDID="$JB/usr/bin/ldid"
-[ -x "$LDID" ] || LDID=/usr/bin/ldid
-ENT="$JB/usr/local/share/creddaemon.entitlements"
-if [ -x "$LDID" ] && [ -f "$ENT" ]; then
-    "$LDID" -S"$ENT" "$JB/usr/local/bin/creddaemon" >/dev/null 2>&1 && echo "creddaemon: 已用 ldid 重新签名"
-fi
+chmod 755 "$JB/usr/local/bin/creddaemon.sh" 2>/dev/null
+# 旧版编译 daemon（0.2.0 早期）如果还在，删掉，避免混淆
+rm -f "$JB/usr/local/bin/creddaemon" "$JB/usr/local/share/creddaemon.entitlements" 2>/dev/null
 chmod 644 "$JB/Library/LaunchDaemons/com.szafx.creddaemon.plist" 2>/dev/null
 
+# 看门狗在用户域（用户登录会话里）跑，进程身份是 mobile —— 状态目录要给 mobile 写权限
 mkdir -p /var/mobile/Library/CredDaemon/state 2>/dev/null
+chown -R mobile:mobile /var/mobile/Library/CredDaemon 2>/dev/null
 chmod 755 /var/mobile/Library/CredDaemon /var/mobile/Library/CredDaemon/state 2>/dev/null
 
 PLIST="$JB/Library/LaunchDaemons/com.szafx.creddaemon.plist"
@@ -22,14 +19,12 @@ LCTL="$JB/bin/launchctl"
 [ -x "$LCTL" ] || LCTL=/usr/bin/launchctl
 
 # 先卸载旧的，再加载
-"$LCTL" bootout system "$PLIST" >/dev/null 2>&1
-"$LCTL" bootstrap system "$PLIST" >/dev/null 2>&1
-if [ $? -ne 0 ]; then
-    "$LCTL" unload "$PLIST" >/dev/null 2>&1
-    "$LCTL" load -w "$PLIST" >/dev/null 2>&1
-fi
+"$LCTL" bootout user/501/com.szafx.creddaemon >/dev/null 2>&1
+"$LCTL" bootout system/com.szafx.creddaemon >/dev/null 2>&1
+"$LCTL" unload "$PLIST" >/dev/null 2>&1
+"$LCTL" load -w "$PLIST" >/dev/null 2>&1
 
-sleep 1
+sleep 2
 if [ -f /var/mobile/Library/CredDaemon/heartbeat.json ]; then
     echo "creddaemon: 已启动（心跳已写入）"
 else

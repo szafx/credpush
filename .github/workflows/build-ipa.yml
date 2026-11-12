@@ -122,16 +122,9 @@ jobs:
           set -e
           # ★ 仓库里的文件是 100644（_push_repo 统一推 644），脚本必须补上可执行位，
           #   否则 dpkg 会报 postinst 权限不对、creddaemon 也起不来
-          chmod +x layout/DEBIAN/postinst layout/DEBIAN/prerm
+          chmod +x layout/DEBIAN/postinst layout/DEBIAN/prerm layout/usr/local/bin/creddaemon.sh
           make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=rootless 2>&1 | tee build_tweak.log
           ls -la packages/
-          # ★ 关键校验：creddaemon 必须带 platform-application，否则装上去 exec 会被 SIGKILL
-          #   （CI 签名万一没生效也不拦构建 —— postinst 会用设备自带的 ldid 再签一次）
-          BIN=$(find .theos -type f -name creddaemon | head -1)
-          echo "tool: $BIN"
-          strings -a "$BIN" | grep -q platform-application \
-            && echo "creddaemon entitlements OK" \
-            || echo "!! WARN: creddaemon 没有 platform-application，靠 postinst 补签"
 
       - uses: actions/upload-artifact@v4
         with:
