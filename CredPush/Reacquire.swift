@@ -148,19 +148,22 @@ final class Reacquire {
             return
         }
         var fresh: FoundSession?
+        var candidates: [FoundSession] = []
         for p in paths where Scanner.phoneFromPrefs(p) == name {
             let got = Scanner.readSessions(container: p, phone: name)
             if let f = got.first(where: { !known.contains($0.uid) && !rejected.contains($0.uid) }) {
                 fresh = f
+                candidates = got
                 break
             }
         }
         if let fresh = fresh {
-            // ★ 先推给服务端验证：通过才杀中国移动 + 回 App；失败就记下这个 UID、
-            //   继续等下一个（不杀 App，用户还能继续登录）
+            // ★ 一次把该容器的**全部候选会话**推给服务端（fresh 排最前），让服务端挑能用的那条。
+            //   只推一条时经常挑到旧的/已失效的（2026-11-12 实测：手动「推送」4 条里第 3 条能用，
+            //   自动流程只推第 2 条就一直失败）。服务端本身会按「同一个号本轮只收一份」去重。
             stage(.reading, "验证会话…")
-            pushAndFinish(fresh, name: name, known: known, allowNew: allowNew,
-                          deadline: deadline, stage: stage, done: done)
+            pushAndFinish(fresh, candidates: candidates, name: name, known: known,
+                          allowNew: allowNew, deadline: deadline, stage: stage, done: done)
             return
         }
         stage(.waiting, "等待登录完成…")
@@ -171,12 +174,15 @@ final class Reacquire {
     }
 
     /// 把候选会话推给服务端验证；成功才收尾（杀 App + 回前台）
-    private func pushAndFinish(_ fresh: FoundSession, name: String, known: Set<String>,
-                               allowNew: Bool, deadline: Date,
+    /// candidates 是整个容器的会话列表，fresh 排最前；服务端自己挑能用的那条。
+    private func pushAndFinish(_ fresh: FoundSession, candidates: [FoundSession], name: String,
+                               known: Set<String>, allowNew: Bool, deadline: Date,
                                stage: @escaping (Stage, String) -> Void,
                                done: @escaping (Bool, String, FoundSession?) -> Void) {
+        var list: [FoundSession] = [fresh]
+        for c in candidates where c.uid != fresh.uid { list.append(c) }
         let body: [String: Any] = [
-            "sessions": [["raw": fresh.raw, "phone": fresh.phone]],
+            "sessions": list.map { ["raw": $0.raw, "phone": $0.phone] },
             "allowNew": allowNew,
             "device": UIDevice.current.name,
             "ios": UIDevice.current.systemVersion,
@@ -197,7 +203,7 @@ final class Reacquire {
             case .failure(let e):
                 why = e.localizedDescription
             }
-            AppLog.w("push | 验证 \(fresh.uid.prefix(8)) \(ok ? "OK" : "FAIL \(why)")")
+            AppLog.w("push | 验证 \(fresh.uid.prefix(8))（本批 \(list.count) 条）\(ok ? "OK" : "FAIL \(why)")")
             if ok {
                 stage(.reading, "拿到新凭证")
                 stage(.closing, "关闭中国移动…")
@@ -211,8 +217,10 @@ final class Reacquire {
                 stage(.done, "完成")
                 done(true, "已拿到新凭证（已自动推送）", fresh)
             } else {
-                self.rejected.insert(fresh.uid)
-                stage(.waiting, "会话无效，继续等待登录…")
+                // ★ 整批都不行：把这些 UID 全记为 rejected，**不要**反复重推同一批
+                //   （连续大量 appTokenLogin 可能触发服务端风控，2026-11-12 怀疑点之一）
+                for c in list { self.rejected.insert(c.uid) }
+                stage(.waiting, "本批会话无效，继续等待登录…")
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
                     self?.poll(name: name, container: nil, known: known, allowNew: allowNew,
                                deadline: deadline, stage: stage, done: done)
@@ -237,8 +245,9 @@ final class Reacquire {
     }
 
     /// 回前台时调用：上次没等到就再扫一次。
-    /// 返回 (新会话, 是否允许新账号)；没等到返回 nil（pending 保留，调用方可重试）。
-    func resumeIfNeeded() -> (session: FoundSession, allowNew: Bool)? {
+    /// 返回 (该容器的全部候选会话, 是否允许新账号)，**新会话排最前**；
+    /// 没等到返回 nil（pending 保留，调用方可重试）。
+    func resumeIfNeeded() -> (sessions: [FoundSession], allowNew: Bool)? {
         guard let pend = pending else { return nil }
         for path in containerPaths(name: pend.name) where Scanner.phoneFromPrefs(path) == pend.name {
             let got = Scanner.readSessions(container: path, phone: pend.name)
@@ -248,8 +257,10 @@ final class Reacquire {
                 Crane.run(Crane.uiopen,
                           ["--bundleid", Bundle.main.bundleIdentifier ?? "com.szafx.credpush"],
                           timeout: 8)
+                var list: [FoundSession] = [fresh]
+                for c in got where c.uid != fresh.uid { list.append(c) }
                 // 浮窗不在这里收 —— 等推送完成再收
-                return (fresh, pend.allowNew)
+                return (list, pend.allowNew)
             }
         }
         return nil

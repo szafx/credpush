@@ -86,7 +86,8 @@ final class CredViewController: UIViewController {
         if let r = Reacquire.shared.resumeIfNeeded() {
             resumeTimer?.invalidate(); resumeTimer = nil
             statusLabel.text = "回前台补抓到了新会话"
-            pushSessions([r.session], allowNew: r.allowNew)
+            // ★ 推整批候选会话（新会话在第一位），别只推一条 —— 见 Reacquire.pushAndFinish 的注释
+            pushSessions(r.sessions, allowNew: r.allowNew)
             scan()
             return
         }
@@ -101,7 +102,7 @@ final class CredViewController: UIViewController {
                 t.invalidate()
                 self.resumeTimer = nil
                 self.statusLabel.text = "回前台补抓到了新会话"
-                self.pushSessions([r.session], allowNew: r.allowNew)
+                self.pushSessions(r.sessions, allowNew: r.allowNew)
                 self.scan()
             } else if ticks >= 30 {
                 t.invalidate()
