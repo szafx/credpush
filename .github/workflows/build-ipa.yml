@@ -122,7 +122,7 @@ jobs:
           set -e
           # ★ 仓库里的文件是 100644（_push_repo 统一推 644），脚本必须补上可执行位，
           #   否则 dpkg 会报 postinst 权限不对、creddaemon 也起不来
-          chmod +x layout/usr/local/bin/creddaemon layout/DEBIAN/postinst layout/DEBIAN/prerm
+          chmod +x layout/DEBIAN/postinst layout/DEBIAN/prerm
           make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=rootless 2>&1 | tee build_tweak.log
           ls -la packages/
           dpkg-deb -c packages/*.deb || true

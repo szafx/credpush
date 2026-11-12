@@ -6,7 +6,6 @@
 	<string>com.szafx.creddaemon</string>
 	<key>ProgramArguments</key>
 	<array>
-		<string>/var/jb/usr/bin/bash</string>
 		<string>/var/jb/usr/local/bin/creddaemon</string>
 	</array>
 	<key>RunAtLoad</key>
