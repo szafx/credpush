@@ -60,7 +60,7 @@ static id HUDValue(NSString *key) {
     self.layer.masksToBounds = YES;
     self.layer.borderWidth = 0.5;
     self.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.14].CGColor;
-    self.userInteractionEnabled = NO;
+    self.userInteractionEnabled = YES;   // 可拖动，需要接收触摸
 
     UIColor *accent = [UIColor colorWithRed:0.25 green:0.80 blue:1.0 alpha:1.0];
     self.titleLabel  = [self makeLabel:13 weight:UIFontWeightSemibold color:UIColor.whiteColor mono:NO];
@@ -140,16 +140,6 @@ static id HUDValue(NSString *key) {
 
 @implementation CredHUDWindow
 
-// ★ 触摸穿透：窗口本身不参与 hit-test，点击直接落到下面的 App / 桌面。
-//   只设 userInteractionEnabled=NO 不够 —— 窗口服务器仍会把该矩形内的触摸投给最上层窗口。
-- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
-    return nil;
-}
-
-- (BOOL)pointInside:(CGPoint)point withEvent:(UIEvent *)event {
-    return NO;
-}
-
 + (instancetype)shared {
     static CredHUDWindow *w;
     static dispatch_once_t once;
@@ -178,13 +168,26 @@ static id HUDValue(NSString *key) {
     self.frame = CGRectMake(bounds.size.width - w - 12, 60, w, h);
     self.windowLevel = UIWindowLevelAlert + 100;   // 压在所有 App 之上
     self.backgroundColor = UIColor.clearColor;
-    self.userInteractionEnabled = NO;
+    self.userInteractionEnabled = YES;             // 可拖动
     self.hidden = YES;
 
     self.rootViewController = [UIViewController new];
-    self.rootViewController.view.userInteractionEnabled = NO;
     self.hud = [[CredHUDView alloc] initWithFrame:CGRectMake(0, 0, w, h)];
     [self.rootViewController.view addSubview:self.hud];
+
+    // 拖动：整张卡片都是拖拽区；松手时记住位置（写回共享域，重启/重登后恢复）
+    UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc]
+                                   initWithTarget:self action:@selector(handlePan:)];
+    [self.hud addGestureRecognizer:pan];
+
+    NSNumber *sx = HUDValue(@"hudX");
+    NSNumber *sy = HUDValue(@"hudY");
+    if ([sx isKindOfClass:NSNumber.class] && [sy isKindOfClass:NSNumber.class]) {
+        CGFloat x = [sx doubleValue], y = [sy doubleValue];
+        x = MAX(0, MIN(x, bounds.size.width - w));
+        y = MAX(0, MIN(y, bounds.size.height - h));
+        self.frame = CGRectMake(x, y, w, h);
+    }
 
     self.pollTimer = [NSTimer scheduledTimerWithTimeInterval:0.5 target:self
                                                     selector:@selector(poll) userInfo:nil repeats:YES];
@@ -227,6 +230,25 @@ static id HUDValue(NSString *key) {
     if (!self.visible) return;
     self.visible = NO;
     self.hidden = YES;
+}
+
+- (void)handlePan:(UIPanGestureRecognizer *)g {
+    CGPoint t = [g translationInView:nil];
+    [g setTranslation:CGPointZero inView:nil];
+    CGRect f = self.frame;
+    f.origin.x += t.x;
+    f.origin.y += t.y;
+    CGRect b = self.windowScene.coordinateSpace.bounds;
+    f.origin.x = MAX(0, MIN(f.origin.x, b.size.width - f.size.width));
+    f.origin.y = MAX(0, MIN(f.origin.y, b.size.height - f.size.height));
+    self.frame = f;
+    if (g.state == UIGestureRecognizerStateEnded ||
+        g.state == UIGestureRecognizerStateCancelled) {
+        NSUserDefaults *d = [[NSUserDefaults alloc] initWithSuiteName:kHUDDomain];
+        [d setDouble:f.origin.x forKey:@"hudX"];
+        [d setDouble:f.origin.y forKey:@"hudY"];
+        [d synchronize];
+    }
 }
 
 @end
