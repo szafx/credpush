@@ -54,10 +54,16 @@ final class LiveBox {
     private var stepStart = Date()
     /// 最新状态：活动创建是异步的，创建期间收到的 update 先存这里，建好后补上
     private var latest: CredActivityAttributes.ContentState?
+    /// 浮窗（CredHUD tweak）显示的标题
+    private var hudTitle = ""
 
     func start(name: String) {
         currentStep = 0
         stepStart = Date()
+        hudTitle = name
+        // 越狱浮窗（CredHUD tweak）：只写文件，没有 tweak 时无害
+        HUDWriter.update(title: name, step: 0, total: 6, short: "准备中",
+                         detail: "即将切换容器", startedAt: stepStart)
         let st = CredActivityAttributes.ContentState(step: 0, short: "准备中",
                                                      detail: "即将切换容器", stepStartedAt: Date())
         latest = st
@@ -104,6 +110,8 @@ final class LiveBox {
         let st = CredActivityAttributes.ContentState(step: step, short: short,
                                                      detail: detail, stepStartedAt: stepStart)
         latest = st          // 活动还在创建中时先存着，建好后立刻补上
+        HUDWriter.update(title: hudTitle, step: step, total: 6,
+                         short: short, detail: detail, startedAt: stepStart)
         guard let a = activity else { return }
         Task { await apply(st, to: a) }
     }
@@ -120,6 +128,7 @@ final class LiveBox {
     }
 
     func end(_ detail: String) {
+        HUDWriter.hide()
         guard let a = activity else { return }
         activity = nil
         latest = nil
@@ -138,6 +147,7 @@ final class LiveBox {
     func endAll() {
         activity = nil
         latest = nil
+        HUDWriter.hide()
         Task {
             for a in Activity<CredActivityAttributes>.activities {
                 if #available(iOS 16.2, *) {

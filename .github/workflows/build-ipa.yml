@@ -105,3 +105,36 @@ jobs:
           name: CredPush-ipa
           path: out/CredPush.ipa
           if-no-files-found: error
+
+  # ------------------------------------------------------------------
+  # 越狱浮窗 tweak（CredHUD）—— 和 App 同一条 workflow，两个 artifact
+  # ------------------------------------------------------------------
+  build-tweak:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Theos
+        run: |
+          set -e
+          export THEOS="$RUNNER_TEMP/theos"
+          git clone --recursive --depth 1 https://github.com/theos/theos.git "$THEOS"
+          git clone --depth 1 https://github.com/theos/sdks.git "$THEOS/sdks"
+          echo "THEOS=$THEOS" >> $GITHUB_ENV
+          echo "$THEOS/bin" >> $GITHUB_PATH
+          brew install ldid || true
+          ls "$THEOS" | head -20
+
+      - name: 编译 CredHUD（rootless）
+        working-directory: tweak
+        run: |
+          set -e
+          make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=rootless 2>&1 | tee build_tweak.log
+          ls -la packages/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CredHUD-deb
+          path: tweak/packages/*.deb
+          if-no-files-found: error
