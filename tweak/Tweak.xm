@@ -93,6 +93,17 @@ static id HUDValue(NSString *key) {
 
 @implementation CredHUDWindow
 
+// ★ 触摸穿透：窗口本身不参与 hit-test，点击直接落到下面的 App / 桌面。
+//   只设 userInteractionEnabled=NO 不够 —— 窗口服务器仍会把该矩形内的触摸投给最上层窗口，
+//   必须在窗口级别把 hitTest 直接返回 nil。
+- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
+    return nil;
+}
+
+- (BOOL)pointInside:(CGPoint)point withEvent:(UIEvent *)event {
+    return NO;
+}
+
 + (instancetype)shared {
     static CredHUDWindow *w;
     static dispatch_once_t once;
@@ -125,6 +136,7 @@ static id HUDValue(NSString *key) {
     self.hidden = YES;
 
     self.rootViewController = [UIViewController new];
+    self.rootViewController.view.userInteractionEnabled = NO;
     self.hud = [[CredHUDView alloc] initWithFrame:CGRectMake(0, 0, w, h)];
     [self.rootViewController.view addSubview:self.hud];
 
