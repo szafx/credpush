@@ -151,16 +151,18 @@ final class Reacquire {
         var candidates: [FoundSession] = []
         for p in paths where Scanner.phoneFromPrefs(p) == name {
             let got = Scanner.readSessions(container: p, phone: name)
-            if let f = got.first(where: { !known.contains($0.uid) && !rejected.contains($0.uid) }) {
+            // ★ 新会话可能不止一条（冷启动 + 登录各一条）：挑**最新**的，别挑第一条
+            let news = got.filter { !known.contains($0.uid) && !rejected.contains($0.uid) }
+            if let f = news.max(by: { $0.recency < $1.recency }) {
                 fresh = f
                 candidates = got
                 break
             }
         }
         if let fresh = fresh {
-            // ★ 一次把该容器的**全部候选会话**推给服务端（fresh 排最前），让服务端挑能用的那条。
-            //   只推一条时经常挑到旧的/已失效的（2026-11-12 实测：手动「推送」4 条里第 3 条能用，
-            //   自动流程只推第 2 条就一直失败）。服务端本身会按「同一个号本轮只收一份」去重。
+            // ★ 只推**最新的那一条**（上面已经按 recency 挑出来了）。
+            //   2026-11-12 实测：整批推时前面几条失效的会先把服务端打到「登录状态已过期」，
+            //   同一批里真正有效的那条也被连坐；单独推最新那条是 ok 的。
             stage(.reading, "验证会话…")
             pushAndFinish(fresh, candidates: candidates, name: name, known: known,
                           allowNew: allowNew, deadline: deadline, stage: stage, done: done)
@@ -179,8 +181,8 @@ final class Reacquire {
                                known: Set<String>, allowNew: Bool, deadline: Date,
                                stage: @escaping (Stage, String) -> Void,
                                done: @escaping (Bool, String, FoundSession?) -> Void) {
-        var list: [FoundSession] = [fresh]
-        for c in candidates where c.uid != fresh.uid { list.append(c) }
+        // ★ 只推最新这一条（整批会把有效的那条连坐）
+        let list: [FoundSession] = [fresh]
         let body: [String: Any] = [
             "sessions": list.map { ["raw": $0.raw, "phone": $0.phone] },
             "allowNew": allowNew,

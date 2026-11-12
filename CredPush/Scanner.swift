@@ -7,6 +7,10 @@ struct FoundSession {
     let phone: String
     /// 会话里的 UID：用来判断「服务端那份」和「容器里的」是不是同一条
     let uid: String
+    /// 在 Cache.db-wal 里**最后一次出现**的字节偏移（越大越新）；非 WAL 来源为 -1。
+    /// ★ 一定要「单独推最新那条」：整批一起推时，前面几条失效的会先把服务端打到
+    ///   「登录状态已过期」，同一批里真正有效的那条也被连坐（2026-11-12 实测）。
+    let recency: Int
 }
 
 /// 扫「中国移动」App 的容器（主容器 + Crane 分身），挖出 App 会话。
@@ -98,15 +102,16 @@ enum Scanner {
     /// 读一个容器的三个会话来源（Cache.db-wal / Cache.db / Cookies.binarycookies）
     static func readSessions(container: String, phone: String,
                              log: ((String) -> Void)? = nil) -> [FoundSession] {
-        var out: [FoundSession] = []
+        var cands: [(norm: String, source: String, uid: String)] = []
         var seen = Set<String>()
+        var recency: [String: Int] = [:]    // norm -> WAL 里最后一次出现的偏移
         let files = [
             container + "/Library/Caches/cn.10086.app/Cache.db-wal",
             container + "/Library/Caches/cn.10086.app/Cache.db",
             container + "/Library/Cookies/Cookies.binarycookies",
         ]
         let label = phone.isEmpty ? String((container as NSString).lastPathComponent.prefix(8)) + "…" : phone
-        for f in files {
+        for (idx, f) in files.enumerated() {
             let name = (f as NSString).lastPathComponent
             let data: Data
             do {
@@ -135,13 +140,19 @@ enum Scanner {
                 }
                 let norm = "JSESSIONID=\(jid); UID=\(uid); Comment=SessionServer-unity; "
                     + "Path=/;HTTPOnly; " + (ticket.isEmpty ? "" : "ticketID=\(ticket); ") + "Secure"
+                if idx == 0 {   // 只有 WAL 里的位置能代表「新旧」
+                    recency[norm] = max(recency[norm] ?? -1, m.range.location)
+                }
                 if seen.insert(norm).inserted {
-                    out.append(FoundSession(raw: norm, source: name, phone: phone, uid: uid))
+                    cands.append((norm, name, uid))
                 }
             }
             log?("   \(label)/\(name)：\(data.count) 字节，命中 \(matches.count)")
         }
-        return out
+        return cands.map {
+            FoundSession(raw: $0.norm, source: $0.source, phone: phone, uid: $0.uid,
+                         recency: recency[$0.norm] ?? -1)
+        }
     }
 
     /// 全量扫描（带日志，诊断/凭证页都用它）

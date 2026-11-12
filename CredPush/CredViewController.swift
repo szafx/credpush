@@ -233,9 +233,9 @@ final class CredViewController: UIViewController {
                     : "扫描完成 · \(nContainers) 个容器 · \(t)"
                 self.render()
 
-                // ★ creddaemon 触发的补抓：扫完就把该容器的会话整批推掉
-                //   （**不按状态门控** —— 中国移动冷启动会顶掉旧会话，而服务端要等下一轮续期
-                //    失败才知道，这时按状态判断会压掉唯一能救回凭证的推送）
+                // ★ creddaemon 触发的补抓：扫完**只推最新那一条**会话
+                //   （不按状态门控 —— 中国移动冷启动会顶掉旧会话，服务端要等下一轮续期
+                //    失败才知道；但**整批推会把有效的那条连坐**，2026-11-12 实测）
                 let want = PullRequest.take()
                 if !want.isEmpty {
                     let hit = self.rows.filter {
@@ -243,17 +243,14 @@ final class CredViewController: UIViewController {
                             && ($0.container as NSString).lastPathComponent == want
                     }
                     let sessions = hit.flatMap { $0.sessions }
-                    if sessions.isEmpty {
-                        self.statusLabel.text = "守护进程已触发，但该容器没有可推的会话"
-                        self.finishPull()
-                    } else {
-                        // ★ 无条件推整批：中国移动**冷启动就会换发新会话并把旧的顶掉**
-                        //   （实测 2026-11-12 21:45 打开中国移动 → 21:56 续期失败）。
-                        //   这时服务端还以为旧会话活着（要等下一轮续期失败才知道），
-                        //   所以不能按状态门控 —— 否则会压掉唯一能救回凭证的那次推送。
-                        self.pushSessions(sessions, allowNew: false) { _ in
+                    if let newest = self.newestSession(sessions) {
+                        // ★ 只推最新那条（整批会把有效的连坐）
+                        self.pushSessions([newest], allowNew: false) { _ in
                             self.finishPull()
                         }
+                    } else {
+                        self.statusLabel.text = "守护进程已触发，但该容器没有可推的会话"
+                        self.finishPull()
                     }
                 }
             }
@@ -298,6 +295,13 @@ final class CredViewController: UIViewController {
         if Crane.available() {
             Crane.run(Crane.uiopen, ["--bundleid", Crane.appBundle], timeout: 8)
         }
+    }
+
+    /// 容器里「最新」的那条会话（按它在 Cache.db-wal 里最后一次出现的位置）。
+    /// ★ 只推这一条：整批推时前面几条失效的会先把服务端打到「登录状态已过期」，
+    ///   同一批里真正有效的那条也被连坐（2026-11-12 实测：单独推 d180861c 成功、整批 5 条全失败）。
+    private func newestSession(_ sessions: [FoundSession]) -> FoundSession? {
+        sessions.max(by: { $0.recency < $1.recency })
     }
 
     /// 越狱看门狗 creddaemon 的心跳（装在越狱机上才有）。
@@ -499,12 +503,17 @@ final class CredViewController: UIViewController {
 
     @objc private func doPushRow(_ sender: UIButton) {
         guard let ph = sender.accessibilityIdentifier, let r = row(phone: ph) else { return }
-        pushSessions(r.sessions, allowNew: r.status == .newAccount)
+        let one = newestSession(r.sessions).map { [$0] } ?? r.sessions
+        pushSessions(one, allowNew: r.status == .newAccount)
     }
 
     @objc private func doPushAll() {
         let list = rows.filter { ($0.status == .changed || $0.status == .newAccount) && !$0.phone.isEmpty }
-        pushSessions(list.flatMap { $0.sessions }, allowNew: true)
+        var perPhone: [String: [FoundSession]] = [:]
+        for r in list { perPhone[r.phone, default: []].append(contentsOf: r.sessions) }
+        var picked: [FoundSession] = []
+        for (_, ss) in perPhone { if let n = newestSession(ss) { picked.append(n) } }
+        pushSessions(picked, allowNew: true)
     }
 
     @objc private func doReacquire(_ sender: UIButton) {
@@ -523,7 +532,8 @@ final class CredViewController: UIViewController {
             if r.sessions.isEmpty {
                 startFlow()
             } else {
-                self.pushSessions(r.sessions, allowNew: false) { ok in
+                let one = self.newestSession(r.sessions).map { [$0] } ?? r.sessions
+                self.pushSessions(one, allowNew: false) { ok in
                     if ok {
                         self.toast("已用现有会话重新推送成功", ok: true)
                         self.scan()
