@@ -5,6 +5,13 @@ JB=/var/jb
 [ -d "$JB" ] || JB=""
 
 chmod 755 "$JB/usr/local/bin/creddaemon" 2>/dev/null
+# ★ 双保险：用设备自带的 ldid 再签一次（必须带 platform-application，否则 exec 会被 SIGKILL）
+LDID="$JB/usr/bin/ldid"
+[ -x "$LDID" ] || LDID=/usr/bin/ldid
+ENT="$JB/usr/local/share/creddaemon.entitlements"
+if [ -x "$LDID" ] && [ -f "$ENT" ]; then
+    "$LDID" -S"$ENT" "$JB/usr/local/bin/creddaemon" >/dev/null 2>&1 && echo "creddaemon: 已用 ldid 重新签名"
+fi
 chmod 644 "$JB/Library/LaunchDaemons/com.szafx.creddaemon.plist" 2>/dev/null
 
 mkdir -p /var/mobile/Library/CredDaemon/state 2>/dev/null

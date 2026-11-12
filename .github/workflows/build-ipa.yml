@@ -125,7 +125,13 @@ jobs:
           chmod +x layout/DEBIAN/postinst layout/DEBIAN/prerm
           make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=rootless 2>&1 | tee build_tweak.log
           ls -la packages/
-          dpkg-deb -c packages/*.deb || true
+          # ★ 关键校验：creddaemon 必须带 platform-application，否则装上去 exec 会被 SIGKILL
+          #   （CI 签名万一没生效也不拦构建 —— postinst 会用设备自带的 ldid 再签一次）
+          BIN=$(find .theos -type f -name creddaemon | head -1)
+          echo "tool: $BIN"
+          strings -a "$BIN" | grep -q platform-application \
+            && echo "creddaemon entitlements OK" \
+            || echo "!! WARN: creddaemon 没有 platform-application，靠 postinst 补签"
 
       - uses: actions/upload-artifact@v4
         with:
