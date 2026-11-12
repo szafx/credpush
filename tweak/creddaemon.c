@@ -67,6 +67,18 @@ static long g_triggers;
 static const char *g_apps = APPS_DEFAULT;
 static int g_dry;
 
+static void dbg(const char *fmt, ...) {
+    FILE *f = fopen("/var/mobile/Documents/creddaemon.dbg", "a");
+    if (!f) return;
+    va_list ap;
+    va_start(ap, fmt);
+    vfprintf(f, fmt, ap);
+    va_end(ap);
+    fputc('
+', f);
+    fclose(f);
+}
+
 static void logmsg(const char *fmt, ...) {
     FILE *f = fopen(LOGPATH, "a");
     if (!f) return;
@@ -325,11 +337,14 @@ static void watch_cont(int kq, cont_t *c) {
 }
 
 int main(void) {
-    mkdir(DIRPATH, 0755);
+    dbg("main enter uid=%d euid=%d", (int)getuid(), (int)geteuid());
+    int mk = mkdir(DIRPATH, 0755);
+    dbg("mkdir rc=%d errno=%d", mk, errno);
     if (getenv("CREDDAEMON_DRY") && !strcmp(getenv("CREDDAEMON_DRY"), "1")) g_dry = 1;
     if (getenv("CREDDAEMON_APPS")) g_apps = getenv("CREDDAEMON_APPS");
 
     int kq = kqueue();
+    dbg("kqueue kq=%d errno=%d", kq, errno);
     if (kq < 0) {
         logmsg("kqueue() failed errno=%d", errno);
         return 1;
@@ -338,11 +353,13 @@ int main(void) {
     logmsg("start pid=%d (kqueue) apps=%s dry=%d", (int)getpid(), g_apps, g_dry);
 
     scan_containers();
+    dbg("scan_containers n=%d errno=%d", g_ncont, errno);
     for (int i = 0; i < g_ncont; i++) {
         watch_cont(kq, &g_cont[i]);
         scan_cont(&g_cont[i]);   // 首次扫描：只记基线，不 fire
     }
     heartbeat();
+    dbg("heartbeat done errno=%d", errno);
 
     time_t last_hb = time(NULL);
     struct timespec ts = { HB_SEC, 0 };
