@@ -471,8 +471,9 @@ final class CredViewController: UIViewController {
             }, done: { ok, msg, fresh in
                 hud.finish(ok, detail: msg)
                 self.statusLabel.text = msg
-                if ok, let f = fresh {
-                    self.pushSessions([f], allowNew: createIfMissing)
+                if ok {
+                    // ★ 流程内部已经「先推送验证、通过才杀 App」了，这里不再重复推送
+                    LiveProgress.shared.end("已完成")
                 } else {
                     self.toast(msg, ok: false)
                 }

@@ -38,6 +38,8 @@ final class Reacquire {
     private(set) var running = false
     /// 用户点了「取消」：所有轮询/超时回调看到它就停
     private var cancelled = false
+    /// 已被服务端拒绝的会话 UID（未登录的冷启动会话）—— 不再重复尝试
+    private var rejected = Set<String>()
     private var stageHandler: ((Stage, String) -> Void)?
 
     /// 超时后没抓到，记下来；回前台再续。
@@ -67,6 +69,7 @@ final class Reacquire {
             return
         }
         cancelled = false
+        rejected.removeAll()
         running = true
         stageHandler = stage
         LiveProgress.shared.start(name: name)
@@ -147,28 +150,74 @@ final class Reacquire {
         var fresh: FoundSession?
         for p in paths where Scanner.phoneFromPrefs(p) == name {
             let got = Scanner.readSessions(container: p, phone: name)
-            if let f = got.first(where: { !known.contains($0.uid) }) { fresh = f; break }
+            if let f = got.first(where: { !known.contains($0.uid) && !rejected.contains($0.uid) }) {
+                fresh = f
+                break
+            }
         }
         if let fresh = fresh {
-            stage(.reading, "拿到新凭证")
-            stage(.closing, "关闭中国移动…")
-            Crane.killChinaMobile()
-            // ★ 杀掉中国移动后把「移动工具集」拉回前台（否则会停在桌面）
-            Crane.run(Crane.uiopen,
-                      ["--bundleid", Bundle.main.bundleIdentifier ?? "com.szafx.credpush"],
-                      timeout: 8)
-            endBackground()
-            running = false
-            pending = nil
-            stage(.done, "完成")
-            // 浮窗不在这里收 —— 等推送完成（view controller）再收
-            done(true, "已拿到新凭证", fresh)
+            // ★ 先推给服务端验证：通过才杀中国移动 + 回 App；失败就记下这个 UID、
+            //   继续等下一个（不杀 App，用户还能继续登录）
+            stage(.reading, "验证会话…")
+            pushAndFinish(fresh, name: name, known: known, allowNew: allowNew,
+                          deadline: deadline, stage: stage, done: done)
             return
         }
         stage(.waiting, "等待登录完成…")
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
             self?.poll(name: name, container: container, known: known, allowNew: allowNew,
                        deadline: deadline, stage: stage, done: done)
+        }
+    }
+
+    /// 把候选会话推给服务端验证；成功才收尾（杀 App + 回前台）
+    private func pushAndFinish(_ fresh: FoundSession, name: String, known: Set<String>,
+                               allowNew: Bool, deadline: Date,
+                               stage: @escaping (Stage, String) -> Void,
+                               done: @escaping (Bool, String, FoundSession?) -> Void) {
+        let body: [String: Any] = [
+            "sessions": [["raw": fresh.raw, "phone": fresh.phone]],
+            "allowNew": allowNew,
+            "device": UIDevice.current.name,
+            "ios": UIDevice.current.systemVersion,
+            "app": "credpush/1.0",
+        ]
+        Net.callPanel("/api/cred/push", json: body,
+                      headers: ["X-Cred-Token": Cfg.pushToken], timeout: 60) { [weak self] r in
+            guard let self = self, !self.cancelled else { return }
+            var ok = false
+            var why = ""
+            switch r {
+            case .success(let obj):
+                let items = (obj as? [String: Any])?["items"] as? [[String: Any]] ?? []
+                for it in items {
+                    if (it["ok"] as? Bool) == true { ok = true }
+                    why = (it["msg"] as? String) ?? ""
+                }
+            case .failure(let e):
+                why = e.localizedDescription
+            }
+            AppLog.w("push | 验证 \(fresh.uid.prefix(8)) \(ok ? "OK" : "FAIL \(why)")")
+            if ok {
+                stage(.reading, "拿到新凭证")
+                stage(.closing, "关闭中国移动…")
+                Crane.killChinaMobile()
+                Crane.run(Crane.uiopen,
+                          ["--bundleid", Bundle.main.bundleIdentifier ?? "com.szafx.credpush"],
+                          timeout: 8)
+                self.endBackground()
+                self.running = false
+                self.pending = nil
+                stage(.done, "完成")
+                done(true, "已拿到新凭证（已自动推送）", fresh)
+            } else {
+                self.rejected.insert(fresh.uid)
+                stage(.waiting, "会话无效，继续等待登录…")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                    self?.poll(name: name, container: nil, known: known, allowNew: allowNew,
+                               deadline: deadline, stage: stage, done: done)
+                }
+            }
         }
     }
 
