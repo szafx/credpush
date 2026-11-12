@@ -104,7 +104,6 @@ final class Reacquire {
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 emit(.launch, "打开中国移动…")
-                self.banner(.launch)
                 guard Crane.launchChinaMobile() else {
                     self.running = false
                     LiveProgress.shared.end("拉起失败")
@@ -151,7 +150,6 @@ final class Reacquire {
         if ready, let fresh = got.first(where: { !known.contains($0.uid) }) {
             stage(.reading, "拿到新凭证")
             stage(.closing, "关闭中国移动…")
-            banner(.closing)
             Crane.killChinaMobile()
             endBackground()
             running = false
@@ -162,7 +160,6 @@ final class Reacquire {
             return
         }
         stage(.waiting, "等待登录完成…")
-        banner(.waiting)
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
             self?.poll(name: name, container: container, known: known, allowNew: allowNew,
                        deadline: deadline, stage: stage, done: done)
@@ -179,7 +176,6 @@ final class Reacquire {
         // ★ 不管容器此刻认不认得出，都要登记 —— 回前台后按「Crane 名字」再找一次。
         pending = (name, known, allowNew)
         AppLog.w("reacquire | 等待超时，等回前台续上（name=\(name)）")
-        bannerDone(ok: false)
         LiveProgress.shared.end("等待中 · 切回 App 继续")
         done(false, "还没等到新凭证 —— 切回 App 后会自动再检查", nil)
     }
@@ -227,20 +223,6 @@ final class Reacquire {
             return p
         }
         return nil
-    }
-
-    /// 进度优先显示在灵动岛；**只有在灵动岛没起来时**才退回通知横幅
-    private func banner(_ s: Stage) {
-        guard !LiveProgress.shared.isActive else { return }
-        guard let (t, b) = s.banner else { return }
-        Notifier.alert(t, b)
-    }
-
-    private func bannerDone(ok: Bool) {
-        guard !LiveProgress.shared.isActive else { return }
-        Notifier.alert(ok ? "✓ 凭证已获取" : "⏸ 等待中",
-                       ok ? "已关闭中国移动，返回 App 即可看到结果"
-                          : "切回 App 后会自动再检查一次")
     }
 
     private func endBackground() {

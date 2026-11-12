@@ -11,10 +11,6 @@ targets:
     platform: iOS
     sources:
       - path: CredPush
-      - path: Shared
-    dependencies:
-      - target: CredPushActivity
-        embed: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.szafx.credpush
@@ -70,42 +66,6 @@ targets:
           - /private/usr/bin/launchctl
           - /usr/bin/defaults
           - /private/usr/bin/defaults
-        get-task-allow: true
-
-  # 灵动岛 / 锁屏实时活动（Live Activity）扩展
-  CredPushActivity:
-    type: app-extension
-    platform: iOS
-    deploymentTarget:
-      iOS: "16.1"
-    sources:
-      - path: CredPushActivity
-      - path: Shared
-    info:
-      path: CredPushActivity/Info.plist
-      properties:
-        CFBundleDisplayName: 凭证进度
-        NSExtension:
-          NSExtensionPointIdentifier: com.apple.widgetkit-extension
-    settings:
-      base:
-        # ★ 必须显式写，光靠 deploymentTarget 有时不会落到 target 的 build settings，
-        #   而 DynamicIsland 这些 API 在 <16.1 下会让结果构建器不可用（编译报 buildBlock 错误）。
-        IPHONEOS_DEPLOYMENT_TARGET: "16.1"
-        PRODUCT_BUNDLE_IDENTIFIER: com.szafx.credpush.activity
-        MARKETING_VERSION: "1.0"
-        CURRENT_PROJECT_VERSION: "1"
-        SWIFT_VERSION: "5.0"
-        TARGETED_DEVICE_FAMILY: "1"
-        CODE_SIGNING_ALLOWED: "NO"
-        CODE_SIGNING_REQUIRED: "NO"
-        CODE_SIGN_IDENTITY: ""
-        ENABLE_BITCODE: "NO"
-        SKIP_INSTALL: "YES"
-    entitlements:
-      path: CredPushActivity/CredPushActivity.entitlements
-      properties:
-        platform-application: true
         get-task-allow: true
 
 schemes:

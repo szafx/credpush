@@ -538,7 +538,6 @@ final class CredViewController: UIViewController {
                     }
                     self.statusLabel.text = okN > 0 ? "已更新 \(okN) 个号" : "服务端没有接受"
                     self.toast(okN > 0 ? "已更新 \(okN) 个号" : "没有更新", ok: okN > 0)
-                    if okN > 0 { Notifier.alert("凭证已更新", "\(okN) 个号已写入服务端") }
                 }
                 // 重新拉一次服务端状态
                 AccountCache.updated = nil

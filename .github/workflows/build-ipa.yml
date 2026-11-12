@@ -52,10 +52,6 @@ jobs:
           xcodegen generate
           ls -la
 
-      - name: 打印部署目标（诊断）
-        run: |
-          xcodebuild -project CredPush.xcodeproj -target CredPushActivity -showBuildSettings             | grep -E "IPHONEOS_DEPLOYMENT_TARGET|PRODUCT_NAME" || true
-
       - name: 编译（不签名）
         run: |
           # ★ 一定要 pipefail：`xcodebuild … | tail` 里 tail 永远成功，
@@ -78,13 +74,6 @@ jobs:
           # ★ `-S` 后面**不能有空格**：`ldid -S foo.plist bin` 会被解析成
           #   「签名 foo.plist」→ Unknown header magic（踩过）。
           /tmp/ldid -SCredPush/CredPush.entitlements "$APP/CredPush"
-          # Widget 扩展也要签（灵动岛 Live Activity）
-          for E in "$APP"/PlugIns/*.appex; do
-            [ -e "$E" ] || continue
-            BIN=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$E/Info.plist")
-            echo "signing appex: $E/$BIN"
-            /tmp/ldid -SCredPushActivity/CredPushActivity.entitlements "$E/$BIN"
-          done
           echo "=== 签名后的 entitlements ==="
           /tmp/ldid -e "$APP/CredPush"
           /tmp/ldid -e "$APP/CredPush" | grep -q "AppDataContainers" || { echo "!! entitlements 没写进去"; exit 1; }
