@@ -236,9 +236,9 @@ final class CredViewController: UIViewController {
                     : "扫描完成 · \(nContainers) 个容器 · \(t)"
                 self.render()
 
-                // ★ creddaemon 触发的补抓：扫完**只推最新那一条**会话
+                // ★ creddaemon 触发的补抓：扫完送 1~2 条**候选**会话
                 //   （不按状态门控 —— 中国移动冷启动会顶掉旧会话，服务端要等下一轮续期
-                //    失败才知道；但**整批推会把有效的那条连坐**，2026-11-12 实测）
+                //    失败才知道；但整批推会把有效的那条连坐，2026-11-12 实测）
                 let want = PullRequest.take()
                 if !want.isEmpty {
                     let hit = self.rows.filter {

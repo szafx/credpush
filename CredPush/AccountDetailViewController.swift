@@ -303,8 +303,7 @@ final class AccountDetailViewController: UIViewController {
         guard !no.isEmpty else { alert("不能兑换", "这张券没有券号"); return }
         let a = UIAlertController(
             title: name,
-            message: "用掉这张券？
-会给 \(phone) 发一条短信验证码",
+            message: "用掉这张券？\n会给 \(phone) 发一条短信验证码",
             preferredStyle: .alert)
         a.addAction(UIAlertAction(title: "取消", style: .cancel))
         a.addAction(UIAlertAction(title: "发送验证码", style: .default) { [weak self] _ in
@@ -332,8 +331,7 @@ final class AccountDetailViewController: UIViewController {
     }
 
     private func askCouponCode(no: String, name: String) {
-        let a = UIAlertController(title: "输入验证码", message: "\(name)
-短信已发到 \(phone)",
+        let a = UIAlertController(title: "输入验证码", message: "\(name) · 短信已发到 \(phone)",
                                   preferredStyle: .alert)
         a.addTextField { tf in
             tf.placeholder = "短信验证码"
@@ -365,19 +363,13 @@ final class AccountDetailViewController: UIViewController {
                     self.load()
                 } else {
                     var m = (d["msg"] as? String) ?? "未知错误"
-                    if let h = d["hint"] as? String, !h.isEmpty { m += "
-" + h }
+                    if let h = d["hint"] as? String, !h.isEmpty { m += "\n" + h }
                     self.alert("兑换失败", m)
                 }
             }
         }
     }
 
-    private func alert(_ title: String, _ msg: String) {
-        let a = UIAlertController(title: title, message: msg, preferredStyle: .alert)
-        a.addAction(UIAlertAction(title: "好", style: .default))
-        present(a, animated: true)
-    }
 
     private func actionsCard() -> UIView {
         let v = Theme.card(16)
