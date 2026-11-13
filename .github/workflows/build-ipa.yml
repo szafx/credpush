@@ -116,6 +116,22 @@ jobs:
           brew install ldid || true
           ls "$THEOS" | head -20
 
+      - name: 准备 Go（直推 helper 用）
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: 编译 credpush-helper（iOS arm64 静态二进制）
+        working-directory: tweak/helper
+        run: |
+          set -e
+          mkdir -p ../layout/usr/libexec
+          GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w"             -o ../layout/usr/libexec/credpush-helper .
+          chmod +x ../layout/usr/libexec/credpush-helper
+          ldid -S ../layout/usr/libexec/credpush-helper || true
+          ls -la ../layout/usr/libexec/
+          file ../layout/usr/libexec/credpush-helper || true
+
       - name: 编译 CredHUD（rootless）
         working-directory: tweak
         run: |

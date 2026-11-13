@@ -26,7 +26,7 @@ KICKFILE="$DIR/watchdog.kick"
 STALE="${WATCH_STALE:-90}"          # 锁超过这么久没放 → 判卡死
 HB_STALE="${WATCH_HB:-300}"         # 心跳超过这么久没更新 → 判停摆
 KICK_GAP="${WATCH_KICK_GAP:-600}"   # 两次 kickstart 至少隔这么久
-JOB="${WATCH_JOB:-user/501/com.szafx.creddaemon}"
+JOB="${WATCH_JOB:-system/com.szafx.creddaemon}"
 DRY="${WATCH_DRY:-0}"               # 1 = 只记日志，不真动手（离线测试用）
 
 mkdir -p "$DIR" 2>/dev/null || exit 0
