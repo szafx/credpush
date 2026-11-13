@@ -161,6 +161,16 @@ enum AccountCache {
 
 /// 兼容取值：移动接口的余额/任务数有时是字符串（"96"），有时是数字
 enum Num {
+    /// 浮点（面板的流量余量是小数，例如 12391.3）
+    static func dbl(_ v: Any?) -> Double? {
+        switch v {
+        case let d as Double: return d
+        case let n as NSNumber: return n.doubleValue
+        case let s as String: return Double(s)
+        default: return nil
+        }
+    }
+
     static func int(_ v: Any?) -> Int? {
         switch v {
         case let i as Int: return i

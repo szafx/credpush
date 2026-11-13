@@ -240,17 +240,15 @@ final class AccountDetailViewController: UIViewController {
     private func couponsCard() -> UIView {
         let v = Theme.card(16)
         let cs = (item["coupons"] as? [[String: Any]]) ?? []
-        var rows: [UIView] = [Theme.label("券（\(cs.count)）", size: 12, color: Theme.dim)]
+        var rows: [UIView] = [Theme.label("我的卡券（共 \(cs.count) 张）", size: 12, color: Theme.dim)]
         if cs.isEmpty {
             rows.append(Theme.label("没有券", size: 12, color: Theme.dim))
         } else {
-            for c in cs.sorted(by: { ((Num.int($0["daysLeft"])) ?? 999) < ((Num.int($1["daysLeft"])) ?? 999) }) {
-                let cat = (c["cat"] as? String) == "FLOW" ? "流量券" : "话费券"
-                let name = (c["name"] as? String) ?? "券"
-                let days = Num.int(c["daysLeft"])
-                let left = Theme.label("\(cat) · \(name)", size: 12.5, color: Theme.text, lines: 1)
-                let right = Theme.label(days.map { "剩 \($0) 天" } ?? "—", size: 11,
-                                        color: (days ?? 99) <= 3 ? Theme.red : Theme.dim,
+            for g in AccountsViewController.groupCoupons(cs) {
+                let left = Theme.label("\(g.kind) · \(g.name)" + (g.n > 1 ? " ×\(g.n)" : ""),
+                                       size: 12.5, color: Theme.text, lines: 1)
+                let right = Theme.label(g.days.map { "剩 \($0) 天" } ?? "—", size: 11,
+                                        color: (g.days ?? 99) <= 3 ? Theme.red : Theme.dim,
                                         mono: true)
                 right.setContentHuggingPriority(.required, for: .horizontal)
                 rows.append(Theme.hstack([left, Theme.spacer(), right], spacing: 8))

@@ -11,6 +11,18 @@
 
 set -u
 
+# ★ 加固 1（2026-11-13）：整轮限时 30 秒。
+#   正常一轮 ~20ms；但 iOS 上 `cat` 大文件 / 某个容器目录卡住时，launchd 每 20 秒照样拉新的，
+#   实例会越叠越多（今天 creddaemon 就是这么「launchd 显示 running、进程其实没了」的）。
+#   做法：perl 设个 alarm 再 exec 自己 —— alarm 会跟着 exec 保留。
+#   perl 不一定有（roothide/Procursus 装的不一样），没有就跳过这一层，只靠下面的锁兜底。
+if [ -z "${CREDDAEMON_ALARMED:-}" ]; then
+    _perl=$(command -v perl 2>/dev/null || true)
+    if [ -n "$_perl" ]; then
+        CREDDAEMON_ALARMED=1 exec "$_perl" -e 'alarm shift; exec @ARGV' 30 /usr/bin/bash "$0" "$@"
+    fi
+fi
+
 APPS="${CREDDAEMON_APPS:-/var/mobile/Containers/Data/Application}"
 DIR="/var/mobile/Library/CredDaemon"
 STATE="$DIR/state"
@@ -70,6 +82,20 @@ fire() {
 }
 
 now=$EPOCHSECONDS
+
+# ★ 加固 2：同一时刻只允许一个实例（上一轮卡住时，新实例直接退出，不再叠罗汉）。
+#   判「旧实例还活着」= PID 存在 **且** 锁文件不到 120 秒；不满足就抢过来。
+LOCK="$DIR/run.lock"
+if [ -f "$LOCK" ]; then
+    old=$(cat "$LOCK" 2>/dev/null || echo 0)
+    lage=$(( now - $(stat -c %Y "$LOCK" 2>/dev/null || echo 0) ))
+    if [ "${old:-0}" -gt 0 ] && kill -0 "$old" 2>/dev/null && [ "${lage:-9999}" -lt 120 ]; then
+        exit 0
+    fi
+fi
+printf '%s\n' "$$" > "$LOCK" 2>/dev/null
+trap 'rm -f "$LOCK"' EXIT
+
 n=0
 t=0
 while IFS= read -r c; do

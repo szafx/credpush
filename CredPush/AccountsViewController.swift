@@ -182,7 +182,7 @@ final class AccountsViewController: UIViewController, UIGestureRecognizerDelegat
         }
         let s1 = statChip("\(alive)/\(items.count)", "在线", Theme.green)
         let s2 = statChip("\(bean)", "AI豆·全部\(items.count)号", Theme.cyan)
-        let s3 = statChip("\(flow)", "流量券", Theme.amber)
+        let s3 = statChip("\(flow + fee)", "卡券", Theme.amber)
         let s4 = statChip("\(bad)", "异常", bad > 0 ? Theme.red : Theme.dim)
         let stats = Theme.hstack([s1, s2, s3, s4], spacing: 8)
         stats.distribution = .fillEqually
@@ -273,6 +273,23 @@ final class AccountsViewController: UIViewController, UIGestureRecognizerDelegat
         let row2 = Theme.hstack([beanCol, Theme.spacer(),
                                  Theme.vstack([taskNum, taskCap], spacing: 0)], spacing: 12)
 
+        // 话费 / 流量 / 积分（2026-11-13；走 /api/accounts 的 rich 字段）
+        var richRow: UIView? = nil
+        if let rich = it["rich"] as? [String: Any],
+           let rb = rich["balance"] as? [String: Any] {
+            var bits: [String] = []
+            if let a = rb["amount"] as? String, !a.isEmpty { bits.append("话费 \(a)") }
+            if let fl = rich["flow"] as? [String: Any], let mb = Num.dbl(fl["general_remain_mb"]) {
+                let tot = Num.dbl(fl["general_total_mb"]) ?? 0
+                bits.append(String(format: "流量 %.1fG/%.1fG", mb / 1024.0, tot / 1024.0))
+            }
+            if let p = rb["points"] as? String, !p.isEmpty { bits.append("积分 \(p)") }
+            if !bits.isEmpty {
+                richRow = Theme.label(bits.joined(separator: " · "),
+                                      size: 11.5, color: Theme.dim, lines: 1)
+            }
+        }
+
         let bar = LifeBar()
         bar.set(hours: age.map { $0 / 60 }, dead: !err.isEmpty)
 
@@ -290,7 +307,9 @@ final class AccountsViewController: UIViewController, UIGestureRecognizerDelegat
             pills.append(Theme.pill(txt, color: (soon ?? 99) <= 3 ? Theme.amber : Theme.cyan))
         }
 
-        var parts: [UIView] = [head, row2, bar]
+        var parts: [UIView] = [head, row2]
+        if let rl = richRow { parts.append(rl) }
+        parts.append(bar)
         if !pills.isEmpty { parts.append(Theme.hstack(pills, spacing: 6)) }
 
         if isOpen {
@@ -379,21 +398,38 @@ final class AccountsViewController: UIViewController, UIGestureRecognizerDelegat
         return d
     }
 
+    /// 按「名字 + 到期」合并（195 号能有一堆同名券），名字前标真实券种
+    static func groupCoupons(_ coupons: [[String: Any]]) -> [(name: String, kind: String, days: Int?, n: Int)] {
+        var groups: [String: (name: String, kind: String, days: Int?, n: Int)] = [:]
+        for c in coupons {
+            let name = (c["name"] as? String) ?? "券"
+            let exp = (c["expireAt"] as? String) ?? ""
+            let kind = (c["kind"] as? String)
+                ?? ((c["cat"] as? String) == "FLOW" ? "流量券" : "话费券")
+            let days = Num.int(c["daysLeft"])
+            let key = name + "|" + exp
+            if var g = groups[key] {
+                g.n += 1
+                groups[key] = g
+            } else {
+                groups[key] = (name, kind, days, 1)
+            }
+        }
+        return groups.values.sorted { ($0.days ?? 999) < ($1.days ?? 999) }
+    }
+
     private func couponSection(_ coupons: [[String: Any]]) -> UIView {
-        let title = Theme.label("券", size: 11, weight: .semibold, color: Theme.dim)
+        let title = Theme.label("我的卡券（共 \(coupons.count) 张）", size: 11,
+                                weight: .semibold, color: Theme.dim)
         var rows: [UIView] = [title]
         if coupons.isEmpty {
             rows.append(Theme.label("没有券", size: 12, color: Theme.dim))
         } else {
-            let sorted = coupons.sorted { ((Num.int($0["daysLeft"])) ?? 999) < ((Num.int($1["daysLeft"])) ?? 999) }
-            for c in sorted {
-                let cat = (c["cat"] as? String) == "FLOW" ? "流量券" : "话费券"
-                let name = (c["name"] as? String) ?? "券"
-                let days = Num.int(c["daysLeft"])
-                let left = Theme.label("\(cat) · \(name)", size: 12.5, weight: .medium,
-                                       color: Theme.text, lines: 1)
-                let when = Theme.label(days.map { "剩 \($0) 天" } ?? "—",
-                                       size: 11, color: (days ?? 99) <= 3 ? Theme.red : Theme.dim,
+            for g in AccountsViewController.groupCoupons(coupons) {
+                let left = Theme.label("\(g.kind) · \(g.name)" + (g.n > 1 ? " ×\(g.n)" : ""),
+                                       size: 12.5, weight: .medium, color: Theme.text, lines: 1)
+                let when = Theme.label(g.days.map { "剩 \($0) 天" } ?? "—",
+                                       size: 11, color: (g.days ?? 99) <= 3 ? Theme.red : Theme.dim,
                                        mono: true)
                 when.setContentHuggingPriority(.required, for: .horizontal)
                 rows.append(Theme.hstack([left, Theme.spacer(), when], spacing: 8))
