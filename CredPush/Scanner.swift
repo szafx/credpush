@@ -11,6 +11,11 @@ struct FoundSession {
     /// ★ 一定要「单独推最新那条」：整批一起推时，前面几条失效的会先把服务端打到
     ///   「登录状态已过期」，同一批里真正有效的那条也被连坐（2026-11-12 实测）。
     let recency: Int
+    /// 会话的**创建时间**（来自 Cookies.binarycookies 里 JSESSIONID 那组 cookie 的创建时间）。
+    /// ★ 比 WAL 偏移可靠：2026-11-13 23:48 那次冷启动的新会话，App 只把它写进了
+    ///   Cookies.binarycookies，WAL 里没有位置（recency=-1）—— 只按偏移排序会挑中旧会话，
+    ///   推上去就是「APP登录状态已过期」（事故 B）。有创建时间就以它为准。
+    let createdAt: Date?
 }
 
 /// 扫「中国移动」App 的容器（主容器 + Crane 分身），挖出 App 会话。
@@ -102,13 +107,14 @@ enum Scanner {
     /// 读一个容器的三个会话来源（Cache.db-wal / Cache.db / Cookies.binarycookies）
     static func readSessions(container: String, phone: String,
                              log: ((String) -> Void)? = nil) -> [FoundSession] {
-        var cands: [(norm: String, source: String, uid: String)] = []
-        var seen = Set<String>()
-        var recency: [String: Int] = [:]    // norm -> WAL 里最后一次出现的偏移
+        // norm -> (来源、UID、WAL 偏移、cookie 创建时间)
+        var order: [String] = []
+        var byNorm: [String: (source: String, uid: String, recency: Int, created: Date?)] = [:]
         let files = [
             container + "/Library/Caches/cn.10086.app/Cache.db-wal",
             container + "/Library/Caches/cn.10086.app/Cache.db",
-            container + "/Library/Cookies/Cookies.binarycookies",
+            // ★ binarycookies 是**结构化二进制**，用正则 grep 请求头文本永远命中 0 次，
+            //   所以这一份下面单独解析（cookieSessions）。
         ]
         let label = phone.isEmpty ? String((container as NSString).lastPathComponent.prefix(8)) + "…" : phone
         for (idx, f) in files.enumerated() {
@@ -140,19 +146,126 @@ enum Scanner {
                 }
                 let norm = "JSESSIONID=\(jid); UID=\(uid); Comment=SessionServer-unity; "
                     + "Path=/;HTTPOnly; " + (ticket.isEmpty ? "" : "ticketID=\(ticket); ") + "Secure"
+                if byNorm[norm] == nil { order.append(norm) }
+                var e = byNorm[norm] ?? (source: name, uid: uid, recency: -1, created: nil)
                 if idx == 0 {   // 只有 WAL 里的位置能代表「新旧」
-                    recency[norm] = max(recency[norm] ?? -1, m.range.location)
+                    e.recency = max(e.recency, m.range.location)
                 }
-                if seen.insert(norm).inserted {
-                    cands.append((norm, name, uid))
-                }
+                byNorm[norm] = e
             }
             log?("   \(label)/\(name)：\(data.count) 字节，命中 \(matches.count)")
         }
-        return cands.map {
-            FoundSession(raw: $0.norm, source: $0.source, phone: phone, uid: $0.uid,
-                         recency: recency[$0.norm] ?? -1)
+
+        // ★ 结构化解析 Cookies.binarycookies —— 拿 JSESSIONID/UID/ticketID 四件套 + **创建时间**。
+        //   新会话可能只在这里（WAL 里一条记录都没有），漏了它就会推旧会话（事故 B）。
+        let cookieSess = cookieSessions(container: container, phone: phone)
+        for s in cookieSess {
+            if var e = byNorm[s.raw] {
+                if e.created == nil { e.created = s.createdAt; byNorm[s.raw] = e }
+                continue
+            }
+            // 同一 UID 但 norm 字符串对不齐（ticketID 截断等）→ 合并到已有那条上
+            if let k = byNorm.first(where: { $0.value.uid == s.uid })?.key, var e = byNorm[k] {
+                if e.created == nil { e.created = s.createdAt; byNorm[k] = e }
+                continue
+            }
+            order.append(s.raw)
+            byNorm[s.raw] = (source: s.source, uid: s.uid, recency: -1, created: s.createdAt)
         }
+        if !cookieSess.isEmpty {
+            log?("   \(label)/Cookies.binarycookies：解析出 \(cookieSess.count) 组会话")
+        }
+
+        return order.compactMap { k in
+            guard let e = byNorm[k] else { return nil }
+            return FoundSession(raw: k, source: e.source, phone: phone, uid: e.uid,
+                                recency: e.recency, createdAt: e.created)
+        }
+    }
+
+    // MARK: - Cookies.binarycookies
+
+    /// 一条 cookie 记录
+    struct CookieRec {
+        let domain: String
+        let name: String
+        let value: String
+        let created: Date?
+    }
+
+    /// 解析 Apple 的 `.binarycookies`（`cook` 魔数 + N 个 page + 每 page 若干记录）。
+    /// 结构（实测 iPhone iOS 16 / Darwin 22.2）：
+    ///   header: "cook" + 大端 page 数 + 每个 page 的**大端**长度
+    ///   page:   4B 头 + **小端**记录数 + 记录偏移数组（小端）
+    ///   record: 4B 长度 + 若干 4B 偏移（相对**记录起点**）+ 两个 double（expiry / creation，Apple 纪元）
+    static func parseBinaryCookies(_ data: Data) -> [CookieRec] {
+        let b = [UInt8](data)
+        func be32(_ arr: [UInt8], _ o: Int) -> Int? {
+            guard o >= 0, o + 4 <= arr.count else { return nil }
+            return (Int(arr[o]) << 24) | (Int(arr[o + 1]) << 16) | (Int(arr[o + 2]) << 8) | Int(arr[o + 3])
+        }
+        func le32(_ arr: [UInt8], _ o: Int) -> Int? {
+            guard o >= 0, o + 4 <= arr.count else { return nil }
+            return (Int(arr[o + 3]) << 24) | (Int(arr[o + 2]) << 16) | (Int(arr[o + 1]) << 8) | Int(arr[o])
+        }
+        func f64le(_ arr: [UInt8], _ o: Int) -> Double? {
+            guard o >= 0, o + 8 <= arr.count else { return nil }
+            var v: UInt64 = 0
+            for i in (0..<8).reversed() { v = (v << 8) | UInt64(arr[o + i]) }
+            return Double(bitPattern: v)
+        }
+        func cstr(_ arr: [UInt8], _ at: Int) -> String {
+            guard at >= 0, at < arr.count else { return "" }
+            var e = at
+            while e < arr.count && arr[e] != 0 { e += 1 }
+            return String(decoding: arr[at..<e], as: UTF8.self)
+        }
+        guard be32(b, 0) == 0x636F_6F6B, let pages = be32(b, 4), pages > 0, pages < 256 else { return [] }
+        var off = 8 + 4 * pages
+        var out: [CookieRec] = []
+        for p in 0..<pages {
+            guard let sz = be32(b, 8 + 4 * p), sz > 8, off + sz <= b.count else { break }
+            let page = Array(b[off..<(off + sz)])
+            off += sz
+            guard let n = le32(page, 4), n >= 0, n < 4096 else { continue }
+            for i in 0..<n {
+                guard let ro = le32(page, 8 + 4 * i), ro >= 0, ro + 48 <= page.count else { continue }
+                guard let domainOff = le32(page, ro + 16), let nameOff = le32(page, ro + 20),
+                      let valueOff = le32(page, ro + 28) else { continue }
+                let created = f64le(page, ro + 40).map { Date(timeIntervalSinceReferenceDate: $0) }
+                // ★ 三个字符串偏移都是**相对记录起点**（实测真机 cookie 文件；不是相对 page）
+                let rec = CookieRec(domain: cstr(page, ro + domainOff),
+                                    name: cstr(page, ro + nameOff),
+                                    value: cstr(page, ro + valueOff), created: created)
+                if !rec.name.isEmpty { out.append(rec) }
+            }
+        }
+        return out
+    }
+
+    /// 从 Cookies.binarycookies 里成组取出会话（JSESSIONID + UID + ticketID）。
+    /// ⚠️ iOS 会**延迟落盘** cookie：中国移动还在前台时，文件里可能还是上一次的内容 ——
+    ///    所以它只能和 WAL/DB 互为补充，不能当成唯一来源。
+    static func cookieSessions(container: String, phone: String) -> [FoundSession] {
+        let p = container + "/Library/Cookies/Cookies.binarycookies"
+        guard let d = try? Data(contentsOf: URL(fileURLWithPath: p)), !d.isEmpty else { return [] }
+        let recs = parseBinaryCookies(d)
+        guard !recs.isEmpty else { return [] }
+        var byDomain: [String: [CookieRec]] = [:]
+        for r in recs where !r.domain.isEmpty { byDomain[r.domain, default: []].append(r) }
+        var out: [FoundSession] = []
+        for (_, list) in byDomain {
+            guard let j = list.first(where: { $0.name == "JSESSIONID" }), j.value.count >= 32,
+                  let u = list.first(where: { $0.name == "UID" }), u.value.count >= 10 else { continue }
+            let ticket = list.first(where: { $0.name == "ticketID" })?.value
+            let group: Set<String> = ["JSESSIONID", "UID", "Comment", "ticketID"]
+            let created = list.filter { group.contains($0.name) }.compactMap { $0.created }.max()
+            let norm = "JSESSIONID=\(j.value); UID=\(u.value); Comment=SessionServer-unity; "
+                + "Path=/;HTTPOnly; " + (ticket.map { "ticketID=\($0); " } ?? "") + "Secure"
+            out.append(FoundSession(raw: norm, source: "Cookies.binarycookies", phone: phone,
+                                    uid: u.value, recency: -1, createdAt: created))
+        }
+        return out
     }
 
     /// 全量扫描（带日志，诊断/凭证页都用它）

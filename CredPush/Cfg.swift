@@ -40,6 +40,15 @@ enum Cfg {
         set { d.set(newValue, forKey: "autoScan") }
     }
 
+    /// 守护进程（creddaemon）触发补抓时，一次最多送几条候选会话。
+    /// ★ 服务端是**逐条验、第一条成功即停**（见 凭证链路自愈方案.md 事故 B），
+    ///   所以多送一条的代价只是一次 appTokenLogin，换来「第一条选错还能兜住」。
+    /// 默认 2；想只推一条就在设置里写 pullCandidates=1。
+    static var pullCandidates: Int {
+        let v = d.integer(forKey: "pullCandidates")
+        return v > 0 ? v : 2
+    }
+
     /// 备用地址（例如 Tailscale 直连 http://100.98.108.55:8900）。
     /// 通则优先走它（毫秒级），不通自动退回主地址。
     static var altBase: String {
@@ -125,6 +134,9 @@ enum AccountCache {
     static var dead: Set<String> = []
     /// phone -> 服务端当前持有的 App 会话 UID（扫描时比对该号有没有重新登录过）
     static var uid: [String: String] = [:]
+    /// phone -> 服务端当前持有的 JSESSIONID 前 8 位（**只用于给 creddaemon 写提示**）。
+    /// 服务端没给这个字段时为空，提示文件就不写，行为跟以前一样。
+    static var sid8: [String: String] = [:]
     static var updated: Date?
     /// 已经推送过本地通知的掉线集合（避免重复弹）
     static var notifiedDead: Set<String> = []
@@ -144,6 +156,13 @@ enum AccountCache {
                     for it in items {
                         if let ph = it["phone"] as? String, let u = it["app_uid"] as? String, !u.isEmpty {
                             uid[ph] = u
+                        }
+                    }
+                    // ★ 服务端当前那条会话的 id 前 8 位（可选字段；没有就不写提示文件）
+                    sid8 = [:]
+                    for it in items {
+                        if let ph = it["phone"] as? String, let s = it["app_sid"] as? String, !s.isEmpty {
+                            sid8[ph] = s
                         }
                     }
                     dead = Set(items.filter {

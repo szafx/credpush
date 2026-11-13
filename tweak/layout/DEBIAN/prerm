@@ -4,8 +4,13 @@ set -u
 JB=/var/jb
 [ -d "$JB" ] || JB=""
 PLIST="$JB/Library/LaunchDaemons/com.szafx.creddaemon.plist"
+WPLIST="$JB/Library/LaunchDaemons/com.szafx.creddaemon.watch.plist"
 LCTL="$JB/bin/launchctl"
 [ -x "$LCTL" ] || LCTL=/usr/bin/launchctl
+"$LCTL" bootout user/501/com.szafx.creddaemon >/dev/null 2>&1
+"$LCTL" bootout user/501/com.szafx.creddaemon.watch >/dev/null 2>&1
 "$LCTL" bootout system "$PLIST" >/dev/null 2>&1
+"$LCTL" bootout system "$WPLIST" >/dev/null 2>&1
 "$LCTL" unload "$PLIST" >/dev/null 2>&1
+"$LCTL" unload "$WPLIST" >/dev/null 2>&1
 exit 0

@@ -215,6 +215,15 @@ final class CredViewController: UIViewController {
                 for c in Crane.list() where c.id == act { actName = c.name }
             }
             let nContainers = containers.filter { !$0.phone.isEmpty }.count
+
+            // ★ 给 creddaemon 写「服务端当前那条会话」提示（避免 cookie 延迟落盘造成的误触发）。
+            //   服务端没返回 app_sid 时 AccountCache.sid8 是空的 → 什么都不写，行为同以前。
+            for (ph, sid) in AccountCache.sid8 {
+                if let r = rs.first(where: { $0.phone == ph && !$0.container.isEmpty }) {
+                    self.writeDaemonHint(container: r.container, sid8: sid)
+                }
+            }
+
             DispatchQueue.main.async { [weak self] in
                 guard let self = self else { return }
                 self.rows = rs
@@ -237,16 +246,18 @@ final class CredViewController: UIViewController {
                             && ($0.container as NSString).lastPathComponent == want
                     }
                     let sessions = hit.flatMap { $0.sessions }
-                    if let newest = self.newestSession(sessions) {
-                        // ★ 只推最新那条（整批会把有效的连坐）
-                        //   去重按**会话**：同一条 5 分钟内推过才跳过；出现新会话照推。
-                        let key = newest.uid
+                    let phone = hit.first?.phone ?? ""
+                    let cands = self.pullCandidates(sessions, phone: phone)
+                    if !cands.isEmpty {
+                        // ★ 一次送 1~2 条候选（服务端逐条验、第一条成功即停）。
+                        //   去重按**整组会话**：同一组 5 分钟内推过才跳过；出现新会话照推。
+                        let key = cands.map { $0.uid }.sorted().joined(separator: ",")
                         let now = Date().timeIntervalSince1970
                         if key == self.lastPushedKey && now - self.lastPushAt < 300 {
-                            self.statusLabel.text = "这条会话刚推过，跳过"
+                            self.statusLabel.text = "这几条会话刚推过，跳过"
                             self.finishPull()
                         } else {
-                            self.pushSessions([newest], allowNew: false) { _ in
+                            self.pushSessions(cands, allowNew: false) { _ in
                                 self.finishPull()
                             }
                         }
@@ -299,11 +310,61 @@ final class CredViewController: UIViewController {
         }
     }
 
-    /// 容器里「最新」的那条会话（按它在 Cache.db-wal 里最后一次出现的位置）。
-    /// ★ 只推这一条：整批推时前面几条失效的会先把服务端打到「登录状态已过期」，
-    ///   同一批里真正有效的那条也被连坐（2026-11-12 实测：单独推 d180861c 成功、整批 5 条全失败）。
+    /// 容器里「最新」的那条会话。
+    /// ★ 排序以 **cookie 创建时间** 为准（有的新会话只在 Cookies.binarycookies 里，
+    ///   WAL 里没有位置、recency=-1）；没有创建时间的才退回 WAL 偏移。
+    ///   （2026-11-13 事故 B：只按偏移排会挑中旧会话，推上去就是「登录状态已过期」。）
     private func newestSession(_ sessions: [FoundSession]) -> FoundSession? {
-        sessions.max(by: { $0.recency < $1.recency })
+        sessions.max { a, b in
+            switch (a.createdAt, b.createdAt) {
+            case let (x?, y?):
+                if x != y { return x < y }
+            case (_?, nil):
+                return false          // 有创建时间的更可信
+            case (nil, _?):
+                return true
+            default:
+                break
+            }
+            return a.recency < b.recency
+        }
+    }
+
+    /// 守护进程触发补抓时要送的候选（最多 `Cfg.pullCandidates` 条）。
+    /// 排序：① cookie 创建时间最新 ② WAL 偏移最大 ③ **服务端已有的那条排最后**
+    /// （容器里 UID 和服务端 app_uid 一样 = 没换过，没必要先推它）。
+    /// 服务端是逐条验、第一条成功即停，所以多送一条只是多一次 appTokenLogin。
+    private func pullCandidates(_ sessions: [FoundSession], phone: String) -> [FoundSession] {
+        let serverUid = AccountCache.uid[phone] ?? ""
+        let sorted = sessions.sorted { a, b in
+            switch (a.createdAt, b.createdAt) {
+            case let (x?, y?):
+                if x != y { return x > y }
+            case (_?, nil):
+                return true
+            case (nil, _?):
+                return false
+            default:
+                break
+            }
+            return a.recency > b.recency
+        }
+        let changed = sorted.filter { $0.uid != serverUid }
+        let ordered = changed.isEmpty ? sorted : changed + sorted.filter { $0.uid == serverUid }
+        return Array(ordered.prefix(max(1, Cfg.pullCandidates)))
+    }
+
+    /// 给 creddaemon 写「服务端当前那条会话」的前 8 位。
+    /// daemon 用它避免「cookie 延迟落盘」造成的误触发（2026-11-14 00:03 实测：
+    /// 会话根本没变，只是 cookie 晚落盘，daemon 却把我们 App 拉到前台打断了用户）。
+    private func writeDaemonHint(container: String, sid8: String) {
+        guard !container.isEmpty, !sid8.isEmpty else { return }
+        let cid = (container as NSString).lastPathComponent
+        let dir = "/var/mobile/Library/CredDaemon/hint"
+        let fm = FileManager.default
+        try? fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        try? (sid8 + "\n").write(toFile: dir + "/" + cid + ".sid",
+                                 atomically: true, encoding: .utf8)
     }
 
     /// 越狱看门狗 creddaemon 的心跳（装在越狱机上才有）。

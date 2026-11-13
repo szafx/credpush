@@ -240,18 +240,48 @@ final class AccountDetailViewController: UIViewController {
     private func couponsCard() -> UIView {
         let v = Theme.card(16)
         let cs = (item["coupons"] as? [[String: Any]]) ?? []
-        var rows: [UIView] = [Theme.label("我的卡券（共 \(cs.count) 张）", size: 12, color: Theme.dim)]
+        var rows: [UIView] = [Theme.label("我的卡券（共 \(cs.count) 张）· 点「兑换」可在这台手机上用掉",
+                                          size: 12, color: Theme.dim, lines: 2)]
         if cs.isEmpty {
             rows.append(Theme.label("没有券", size: 12, color: Theme.dim))
         } else {
-            for g in AccountsViewController.groupCoupons(cs) {
+            // 按「名字 + 到期」合并显示，但保留**第一条**（带券号）用于兑换
+            var order: [String] = []
+            var groups: [String: (name: String, kind: String, days: Int?, n: Int, first: [String: Any])] = [:]
+            for c in cs {
+                let name = (c["name"] as? String) ?? "券"
+                let exp = (c["expireAt"] as? String) ?? ""
+                let kind = (c["kind"] as? String)
+                    ?? ((c["cat"] as? String) == "FLOW" ? "流量券" : "话费券")
+                let days = Num.int(c["daysLeft"])
+                let k = name + "|" + exp
+                if var g = groups[k] {
+                    g.n += 1
+                    groups[k] = g
+                } else {
+                    order.append(k)
+                    groups[k] = (name, kind, days, 1, c)
+                }
+            }
+            let sorted = order.sorted { (groups[$0]!.days ?? 999) < (groups[$1]!.days ?? 999) }
+            for k in sorted {
+                guard let g = groups[k] else { continue }
                 let left = Theme.label("\(g.kind) · \(g.name)" + (g.n > 1 ? " ×\(g.n)" : ""),
                                        size: 12.5, color: Theme.text, lines: 1)
                 let right = Theme.label(g.days.map { "剩 \($0) 天" } ?? "—", size: 11,
                                         color: (g.days ?? 99) <= 3 ? Theme.red : Theme.dim,
                                         mono: true)
                 right.setContentHuggingPriority(.required, for: .horizontal)
-                rows.append(Theme.hstack([left, Theme.spacer(), right], spacing: 8))
+                let btn = UIButton(type: .system)
+                btn.setTitle("兑换", for: .normal)
+                btn.titleLabel?.font = UIFont.systemFont(ofSize: 12, weight: .semibold)
+                btn.tintColor = Theme.cyan
+                btn.setContentHuggingPriority(.required, for: .horizontal)
+                let no = (g.first["no"] as? String) ?? ""
+                let nm = g.name
+                btn.addAction(UIAction { [weak self] _ in self?.beginUse(no: no, name: nm) },
+                              for: .touchUpInside)
+                rows.append(Theme.hstack([left, Theme.spacer(), right, btn], spacing: 8))
             }
         }
         let col = Theme.vstack(rows, spacing: 6)
@@ -264,6 +294,89 @@ final class AccountDetailViewController: UIViewController {
             col.trailingAnchor.constraint(equalTo: v.layoutMarginsGuide.trailingAnchor),
         ])
         return v
+    }
+
+
+    // MARK: - 用券（走面板的 /api/coupon/*，不碰 App 自己那条会话）
+
+    private func beginUse(no: String, name: String) {
+        guard !no.isEmpty else { alert("不能兑换", "这张券没有券号"); return }
+        let a = UIAlertController(
+            title: name,
+            message: "用掉这张券？
+会给 \(phone) 发一条短信验证码",
+            preferredStyle: .alert)
+        a.addAction(UIAlertAction(title: "取消", style: .cancel))
+        a.addAction(UIAlertAction(title: "发送验证码", style: .default) { [weak self] _ in
+            self?.sendCouponCode(no: no, name: name)
+        })
+        present(a, animated: true)
+    }
+
+    private func sendCouponCode(no: String, name: String) {
+        Net.callPanel("/api/coupon/send", json: ["phone": phone, "pcard_no": no], timeout: 90) {
+            [weak self] r in
+            guard let self = self else { return }
+            switch r {
+            case .failure(let e):
+                self.alert("发送失败", e.localizedDescription)
+            case .success(let obj):
+                let d = obj as? [String: Any] ?? [:]
+                if (d["ok"] as? Bool) == true {
+                    self.askCouponCode(no: no, name: name)
+                } else {
+                    self.alert("发送失败", (d["msg"] as? String) ?? "未知错误")
+                }
+            }
+        }
+    }
+
+    private func askCouponCode(no: String, name: String) {
+        let a = UIAlertController(title: "输入验证码", message: "\(name)
+短信已发到 \(phone)",
+                                  preferredStyle: .alert)
+        a.addTextField { tf in
+            tf.placeholder = "短信验证码"
+            tf.keyboardType = .numberPad
+            tf.autocorrectionType = .no
+        }
+        a.addAction(UIAlertAction(title: "取消", style: .cancel))
+        a.addAction(UIAlertAction(title: "提交", style: .default) { [weak self] _ in
+            let code = (a.textFields?.first?.text ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            self?.submitCoupon(no: no, name: name, code: code)
+        })
+        present(a, animated: true)
+    }
+
+    private func submitCoupon(no: String, name: String, code: String) {
+        guard code.count >= 4 else { alert("验证码不对", "至少要 4 位"); return }
+        Net.callPanel("/api/coupon/use",
+                      json: ["phone": phone, "pcard_no": no, "code": code],
+                      timeout: 150) { [weak self] r in
+            guard let self = self else { return }
+            switch r {
+            case .failure(let e):
+                self.alert("兑换失败", e.localizedDescription)
+            case .success(let obj):
+                let d = obj as? [String: Any] ?? [:]
+                if (d["ok"] as? Bool) == true {
+                    self.alert("✓ 兑换成功", "\(name) 已提交，24 小时内到账")
+                    self.load()
+                } else {
+                    var m = (d["msg"] as? String) ?? "未知错误"
+                    if let h = d["hint"] as? String, !h.isEmpty { m += "
+" + h }
+                    self.alert("兑换失败", m)
+                }
+            }
+        }
+    }
+
+    private func alert(_ title: String, _ msg: String) {
+        let a = UIAlertController(title: title, message: msg, preferredStyle: .alert)
+        a.addAction(UIAlertAction(title: "好", style: .default))
+        present(a, animated: true)
     }
 
     private func actionsCard() -> UIView {

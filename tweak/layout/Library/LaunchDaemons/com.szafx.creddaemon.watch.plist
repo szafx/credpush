@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.szafx.creddaemon.watch</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/var/jb/usr/bin/bash</string>
+		<string>/var/jb/usr/local/bin/creddaemon_watch.sh</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<!-- ★ 必须是**另一个 label**：launchd 对同一 label 不会并发拉起，
+	     主 daemon 卡死时只有别的 label 才能发现并收拾它（2026-11-13 事故 A）。 -->
+	<key>StartInterval</key>
+	<integer>30</integer>
+	<key>ThrottleInterval</key>
+	<integer>5</integer>
+	<key>UserName</key>
+	<string>root</string>
+	<key>ProcessType</key>
+	<string>Background</string>
+	<key>StandardOutPath</key>
+	<string>/var/mobile/Library/CredDaemon/watch.stdout.log</string>
+	<key>StandardErrorPath</key>
+	<string>/var/mobile/Library/CredDaemon/watch.stderr.log</string>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>/var/jb/usr/bin:/var/jb/bin:/usr/bin:/bin</string>
+	</dict>
+</dict>
+</plist>
