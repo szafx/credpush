@@ -94,7 +94,7 @@ static NSDictionary *Newest(NSArray<NSDictionary *> *cs, NSString *name) {
 int main(int argc, const char *argv[]) {
     @autoreleasepool {
         NSString *container = nil, *cid = @"", *server = @"", *tokenFile = nil;
-        BOOL dry = NO;
+        BOOL dry = NO, useStdin = NO;
         for (int i = 1; i < argc; i++) {
             NSString *a = [NSString stringWithUTF8String:argv[i]];
             if ([a isEqualToString:@"--container"] && i + 1 < argc) container = [NSString stringWithUTF8String:argv[++i]];
@@ -102,16 +102,25 @@ int main(int argc, const char *argv[]) {
             else if ([a isEqualToString:@"--server"] && i + 1 < argc) server = [NSString stringWithUTF8String:argv[++i]];
             else if ([a isEqualToString:@"--token-file"] && i + 1 < argc) tokenFile = [NSString stringWithUTF8String:argv[++i]];
             else if ([a isEqualToString:@"--dry"]) dry = YES;
+            else if ([a isEqualToString:@"--stdin"]) useStdin = YES;
         }
         if (server.length == 0) server = NSProcessInfo.processInfo.environment[@"CREDD_PUSH_URL"];
         if (server.length == 0) server = @"https://ydhf.szafx.icu";
         while ([server hasSuffix:@"/"]) server = [server substringToIndex:server.length - 1];
         if (tokenFile.length == 0) tokenFile = @"/var/mobile/Library/CredDaemon/cred_push.token";
-        if (container.length == 0) { printf("缺 --container\n"); return 2; }
-
-        NSString *cf = [container stringByAppendingPathComponent:@"Library/Cookies/Cookies.binarycookies"];
-        NSData *d = [NSData dataWithContentsOfFile:cf];
-        if (!d) { printf("读不到 cookies: %s\n", cf.UTF8String); return 3; }
+        NSData *d = nil;
+        if (useStdin) {
+            // ★ 2026-11-14：这个 Theos TOOL 进程读不了文件系统（NSData 读任何路径都是 nil，
+            //   连 /var/mobile/Documents 下的副本也不行），而 daemon（bash/root）读没问题。
+            //   所以由 daemon 把 Cookies.binarycookies 从 stdin 喂进来，这里只解析。
+            d = [[NSFileHandle fileHandleWithStandardInput] readDataToEndOfFile];
+            if (d.length == 0) { printf("stdin 没有数据\n"); return 3; }
+        } else {
+            if (container.length == 0) { printf("缺 --container\n"); return 2; }
+            NSString *cf = [container stringByAppendingPathComponent:@"Library/Cookies/Cookies.binarycookies"];
+            d = [NSData dataWithContentsOfFile:cf];
+            if (!d) { printf("读不到 cookies: %s\n", cf.UTF8String); return 3; }
+        }
 
         NSArray<NSDictionary *> *cs = ParseCookies(d);
         NSDictionary *sid = Newest(cs, @"JSESSIONID");
@@ -134,8 +143,13 @@ int main(int argc, const char *argv[]) {
                [tick[@"value"] UTF8String],
                [[df stringFromDate:cd] UTF8String]);
 
-        NSString *token = [[NSString stringWithContentsOfFile:tokenFile encoding:NSUTF8StringEncoding error:nil]
+        // 令牌：环境变量优先（daemon 读文件后传进来），其次才读文件
+        NSString *token = [(NSProcessInfo.processInfo.environment[@"CREDD_TOKEN"] ?: @"")
                            stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        if (token.length == 0) {
+            token = [[NSString stringWithContentsOfFile:tokenFile encoding:NSUTF8StringEncoding error:nil]
+                     stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        }
         if (token.length == 0 && !dry) { printf("没有推送令牌: %s\n", tokenFile.UTF8String); return 5; }
 
         if (dry) {

@@ -151,8 +151,12 @@ fire() {
     if [ -n "$PUSH" ] && [ -x "$PUSH" ]; then
         stage "direct-push $cid"
         log "push  $cid（直推）"
-        if run_to "${CREDDAEMON_PUSH_TIMEOUT:-25}" "$PUSH" \
-                --container "$c" --id "$cid" >> "$DIR/push.log" 2>&1; then
+        # ★ 2026-11-14：helper 这个 Theos TOOL 读不了文件系统，所以
+        #   ① cookie 由这里（bash/root，读文件正常）cat 出来从 stdin 喂进去；
+        #   ② 推送令牌从环境变量传。
+        _ck="$c/Library/Cookies/Cookies.binarycookies"
+        _tok=$(cat "$DIR/cred_push.token" 2>/dev/null)
+        if [ -f "$_ck" ] && CREDD_TOKEN="$_tok" run_to "${CREDDAEMON_PUSH_TIMEOUT:-25}" "$PUSH"                 --stdin --id "$cid" < "$_ck" >> "$DIR/push.log" 2>&1; then
             log "push  $cid OK（直推，不切 App）"
             return 0
         fi
