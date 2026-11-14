@@ -87,30 +87,39 @@ rotate() {
 }
 
 containers() {
-    local m base sub
+    # ★ 每轮 glob 367 个 App 容器目录要 300ms+（还会触发 Crane 子目录 glob），
+    #   容器列表十分钟内基本不变 → 缓存起来，过期才重建。
+    local cache="$DIR/containers.cache" age
+    age=$(( ${now:-$(date +%s)} - $(stat -c %Y "$cache" 2>/dev/null || echo 0) ))
+    if [ -s "$cache" ] && [ "${age:-99999}" -lt "${CREDDAEMON_CONTAINER_TTL:-600}" ]; then
+        cat "$cache"
+        return
+    fi
+    local m base sub tmp="$cache.tmp"
+    : > "$tmp" 2>/dev/null
     for m in "$APPS"/*/Library/Caches/cn.10086.app; do
         [ -d "$m" ] || continue
         base="${m%/Library/Caches/cn.10086.app}"
-        printf '%s\n' "$base"
+        printf '%s
+' "$base" >> "$tmp"
         for sub in "$base"/Library/___Crane_Containers/*/; do
-            [ -d "$sub/Library/Caches/cn.10086.app" ] && printf '%s\n' "${sub%/}"
+            [ -d "$sub/Library/Caches/cn.10086.app" ] && printf '%s
+' "${sub%/}" >> "$tmp"
         done
     done
+    cat "$tmp" 2>/dev/null
+    mv -f "$tmp" "$cache" 2>/dev/null
 }
 
 # 三个文件的指纹：cookies(size,mtime,ctime) + wal(size) + db(size)
 # ★ 为什么用 ctime：同秒内两次写入、大小又恰好一样时，mtime 可能不跳，ctime 会跳。
 fp_of() {
-    local c="$1" cf="$c/Library/Cookies/Cookies.binarycookies"
-    local wf="$c/Library/Caches/cn.10086.app/Cache.db-wal"
-    local df="$c/Library/Caches/cn.10086.app/Cache.db"
-    local a b e f g
-    a=$(stat -c %s "$cf" 2>/dev/null || echo -)
-    b=$(stat -c %Y "$cf" 2>/dev/null || echo -)
-    e=$(stat -c %Z "$cf" 2>/dev/null || echo -)
-    f=$(stat -c %s "$wf" 2>/dev/null || echo -)
-    g=$(stat -c %s "$df" 2>/dev/null || echo -)
-    printf '%s %s %s %s %s' "$a" "$b" "$e" "$f" "$g"
+    # ★ 2026-11-14 实测：这台机器每次 stat 约 200ms（roothide 路径拦截），
+    #   原来每容器 5 次 stat → 一轮 20+ 秒。改成**一次 stat 拿三个字段**。
+    #   新会话落在 Cookies.binarycookies（实测），所以用它做唯一指纹；
+    #   WAL/DB 只在指纹变了之后才读（sessions_of 里）。
+    local c="$1"
+    stat -c '%s %Y %Z' "$c/Library/Cookies/Cookies.binarycookies" 2>/dev/null || printf '%s' '- - -'
 }
 
 # mode=full：首次建基线（读整个 Cache.db）；mode=tail：只读尾部
