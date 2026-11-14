@@ -226,6 +226,17 @@ scanned=0    # 真正读了盘的容器数
 skipped=0    # 被 stat 门控跳过的容器数
 
 load_containers
+# ★ 2026-11-14：roothide 下**每个子进程**都要几百毫秒注入开销，
+#   所以把「每个容器各 stat 一次」合并成「一次 stat 拿全部」。
+declare -A FPMAP=()
+if [ ${#CONT[@]} -gt 0 ]; then
+    _ckpaths=()
+    for _c in "${CONT[@]}"; do _ckpaths+=("$_c/Library/Cookies/Cookies.binarycookies"); done
+    while IFS= read -r _line; do
+        [ -z "$_line" ] && continue
+        FPMAP["${_line%%|*}"]="${_line#*|}"
+    done < <(stat -c '%n|%s|%Y|%Z' "${_ckpaths[@]}" 2>/dev/null)
+fi
 for c in "${CONT[@]}"; do
     [ -z "$c" ] && continue
     n=$((n + 1))
@@ -235,7 +246,7 @@ for c in "${CONT[@]}"; do
     lt_file="$STATE/$cid.last"
 
     stage "stat $cid"
-    cur_fp=$(fp_of "$c")
+    cur_fp="${FPMAP[$c/Library/Cookies/Cookies.binarycookies]:-- - -}"
     old_fp=""
     old_fp=""
     [ -f "$fpfile" ] && read -r old_fp < "$fpfile" 2>/dev/null
