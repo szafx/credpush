@@ -75,7 +75,10 @@ log() {
 
 # 卡在哪一步 —— 看门狗 kill 之前会把它记进 watchdog.log
 stage() {
-    printf '%s %s\n' "$$" "$*" > "$STAGE.tmp" 2>/dev/null && mv -f "$STAGE.tmp" "$STAGE" 2>/dev/null
+    # ★ 每个子进程（stat/cat/mv…）在 roothide 上都要几百毫秒的注入开销，
+    #   所以这里只用**内建命令 + 一次重定向**，不 fork。
+    printf '%s %s
+' "$$" "$*" > "$STAGE" 2>/dev/null
 }
 
 rotate() {
@@ -86,13 +89,14 @@ rotate() {
     fi
 }
 
-containers() {
-    # ★ 每轮 glob 367 个 App 容器目录要 300ms+（还会触发 Crane 子目录 glob），
-    #   容器列表十分钟内基本不变 → 缓存起来，过期才重建。
+load_containers() {
+    # ★ 结果放进全局数组 CONT（mapfile 是内建，不 fork）。
+    #   列表十分钟内基本不变；过期才重新 glob。
+    CONT=()
     local cache="$DIR/containers.cache" age
     age=$(( ${now:-$(date +%s)} - $(stat -c %Y "$cache" 2>/dev/null || echo 0) ))
     if [ -s "$cache" ] && [ "${age:-99999}" -lt "${CREDDAEMON_CONTAINER_TTL:-600}" ]; then
-        cat "$cache"
+        mapfile -t CONT < "$cache" 2>/dev/null
         return
     fi
     local m base sub tmp="$cache.tmp"
@@ -107,8 +111,8 @@ containers() {
 ' "${sub%/}" >> "$tmp"
         done
     done
-    cat "$tmp" 2>/dev/null
-    mv -f "$tmp" "$cache" 2>/dev/null
+    cp -f "$tmp" "$cache" 2>/dev/null || cat "$tmp" > "$cache" 2>/dev/null
+    mapfile -t CONT < "$cache" 2>/dev/null
 }
 
 # 三个文件的指纹：cookies(size,mtime,ctime) + wal(size) + db(size)
@@ -221,7 +225,8 @@ t=0          # 本轮的触发次数
 scanned=0    # 真正读了盘的容器数
 skipped=0    # 被 stat 门控跳过的容器数
 
-while IFS= read -r c; do
+load_containers
+for c in "${CONT[@]}"; do
     [ -z "$c" ] && continue
     n=$((n + 1))
     cid="${c##*/}"
@@ -232,7 +237,8 @@ while IFS= read -r c; do
     stage "stat $cid"
     cur_fp=$(fp_of "$c")
     old_fp=""
-    [ -f "$fpfile" ] && old_fp=$(cat "$fpfile" 2>/dev/null || true)
+    old_fp=""
+    [ -f "$fpfile" ] && read -r old_fp < "$fpfile" 2>/dev/null
     if [ -n "$old_fp" ] && [ "$cur_fp" = "$old_fp" ]; then
         skipped=$((skipped + 1))
         continue                          # ★ 什么都没变：直接跳过（省电的关键）
@@ -312,7 +318,7 @@ while IFS= read -r c; do
         save_state "$st" "$cur"
         printf '%s' "$cur_fp" > "$fpfile" 2>/dev/null
     fi
-done < <(containers)
+done
 
 # 触发记录别无限长
 tsz=$(stat -c %s "$TRIG" 2>/dev/null || echo 0)
@@ -327,6 +333,6 @@ printf '{"ts":%s,"pid":%s,"containers":%s,"triggers":%s,"scanned":%s,"skipped":%
     "$now" "$$" "$n" "$t" "$scanned" "$skipped" \
     "$(( (EPOCHSECONDS - T0) * 1000 ))" \
     "$([ "$DRY" = "1" ] && echo true || echo false)" \
-    > "$HB.tmp" 2>/dev/null && mv -f "$HB.tmp" "$HB"
+    > "$HB" 2>/dev/null
 
 exit 0
