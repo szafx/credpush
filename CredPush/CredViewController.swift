@@ -10,6 +10,8 @@ final class CredViewController: UIViewController {
         var phone: String
         var container: String
         var sessions: [FoundSession]
+        /// 额外说明（例如：会话在另一个容器里，而那个容器登记的是别的号）
+        var note: String = ""
         var status: Status
         var hasMatch: Bool
         var cacheBytes: Int64
@@ -169,11 +171,13 @@ final class CredViewController: UIViewController {
             let containers = Scanner.allContainers()
             var rs: [CredRow] = []
             var onDevice = Set<String>()
+            var uidContainer: [String: String] = [:]   // uid -> 容器路径（跨容器认领用）
             for c in containers {
                 // ★ 只有「真正添加成功」的号才显示：UserPhone 为空 = 没登录完成，
                 //   这些空容器（重复点新增账号留下的）一律不进列表。
                 if c.phone.isEmpty { continue }
                 let sessions = Scanner.readSessions(container: c.path, phone: c.phone)
+                for se in sessions where !se.uid.isEmpty { uidContainer[se.uid] = c.path }
                 let serverUid = AccountCache.uid[c.phone] ?? ""
                 let hasMatch = !serverUid.isEmpty && sessions.contains { $0.uid == serverUid }
                 let known = AccountCache.known.contains(c.phone)
@@ -194,10 +198,26 @@ final class CredViewController: UIViewController {
                                   status: st, hasMatch: hasMatch, cacheBytes: bytes))
                 if !c.phone.isEmpty { onDevice.insert(c.phone) }
             }
-            // 服务端有、本机没有容器的号
+            // 服务端有、本机没有「登记为该号」的容器
+            // ★ 2026-11-15：先按 UID 跨容器认领 —— 用户把某个容器切成别的号后，
+            //   原号的会话常常还留在那个容器里，不能因此判成「在其它设备」。
             for ph in AccountCache.known.sorted() where !onDevice.contains(ph) {
-                rs.append(CredRow(phone: ph, container: "", sessions: [], status: .notOnDevice,
-                                  hasMatch: false, cacheBytes: 0))
+                let su = AccountCache.uid[ph] ?? ""
+                let srcMint = ((AccountCache.source[ph] ?? "app") == "mint")
+                let aliveOK = (AccountCache.alive[ph] ?? true)
+                if !su.isEmpty, let cp = uidContainer[su] {
+                    let cname = (cp as NSString).lastPathComponent
+                    rs.append(CredRow(phone: ph, container: cp, sessions: [],
+                                      status: srcMint ? .remoteOnly : .upToDate,
+                                      hasMatch: true, cacheBytes: 0,
+                                      note: "会话在容器 \(cname.prefix(8))…（该容器登记的是别的号）"))
+                } else if srcMint && aliveOK {
+                    rs.append(CredRow(phone: ph, container: "", sessions: [],
+                                      status: .remoteOnly, hasMatch: false, cacheBytes: 0))
+                } else {
+                    rs.append(CredRow(phone: ph, container: "", sessions: [], status: .notOnDevice,
+                                      hasMatch: false, cacheBytes: 0))
+                }
             }
             rs.sort { a, b in
                 func rank(_ s: CredRow.Status) -> Int {
@@ -454,7 +474,8 @@ final class CredViewController: UIViewController {
         let head = Theme.hstack([Theme.dot(color), Theme.label(masked, size: 15, weight: .semibold, mono: true),
                                  Theme.spacer(), Theme.pill(text, color: color)], spacing: 8)
 
-        var sub = ""
+        var sub = r.note
+        if sub.isEmpty {
         switch r.status {
         case .upToDate: sub = "\(r.sessions.count) 条会话（服务端那份在）"
         case .changed: sub = "\(r.sessions.count) 条会话，但都不是服务端那份"
@@ -465,6 +486,7 @@ final class CredViewController: UIViewController {
             : "服务端还没登记这个号"
         case .notOnDevice: sub = "本机没有这个号的容器（可能在另一台 iPhone 上）"
         case .remoteOnly: sub = "服务端用的是现签会话（手机里没有这条）；在手机上打开一次该号会自动对齐"
+        }
         }
         // ★ 2026-11-15：显示容器里「最新一条会话」的创建时间 —— 一眼看出最近有没有更新过
         if let newest = r.sessions.compactMap({ $0.createdAt }).max() {
