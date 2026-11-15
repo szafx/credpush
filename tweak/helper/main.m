@@ -147,12 +147,13 @@ static NSArray<NSDictionary *> *ParseTextSessions(NSData *d) {
                           @"pos": @(center),
                           @"n": counts[sid] ?: @(0)}];
     }
-    // 排序：① 出现≥2 次的优先（只出现 1 次的多半是陈旧/误配的会话）；
-    //       ② 同档内位置越靠后（越接近文件尾部）越新
+    // 排序：① **出现次数降序** —— 实测活跃会话被反复使用（180 的主会话出现 118 次，
+    //          旁边的僵尸会话只有 1 次），次数是最可靠的新鲜度信号；
+    //       ② 同次数再按文件位置降序（越靠后越新）。
+    //   服务端会逐条试、第一条成功即停，所以排第二的有效会话也能被用到。
     [cand sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
-        BOOL aLive = [a[@"n"] integerValue] >= 2;
-        BOOL bLive = [b[@"n"] integerValue] >= 2;
-        if (aLive != bLive) return aLive ? NSOrderedAscending : NSOrderedDescending;
+        NSInteger an = [a[@"n"] integerValue], bn = [b[@"n"] integerValue];
+        if (an != bn) return (an > bn) ? NSOrderedAscending : NSOrderedDescending;
         return [b[@"pos"] compare:a[@"pos"]];
     }];
     return cand;
