@@ -3,6 +3,8 @@ import UIKit
 /// 单号详情：任务 / 券 / 开关 / 凭证，以及「立即续期」「删除账号」
 final class AccountDetailViewController: UIViewController {
     private let phone: String
+    /// 发码时服务端返回的 serialNo（saveorder 必须带）
+    private var lastSerial = ""
     private let scroll = UIScrollView()
     private let stack = UIStackView()
     private var item: [String: Any] = [:]
