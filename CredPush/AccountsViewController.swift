@@ -21,7 +21,7 @@ final class AccountsViewController: UIViewController, UIGestureRecognizerDelegat
         view.backgroundColor = Theme.bg
         title = "账号"
         navigationItem.rightBarButtonItem = UIBarButtonItem(
-            title: "刷新", style: .plain, target: self, action: #selector(forceReload))
+            title: "强制刷新", style: .plain, target: self, action: #selector(forceReload))
         navigationItem.rightBarButtonItem?.tintColor = Theme.cyan
 
         scroll.translatesAutoresizingMaskIntoConstraints = false
@@ -60,10 +60,10 @@ final class AccountsViewController: UIViewController, UIGestureRecognizerDelegat
         load(force: false)
     }
 
-    /// 下拉：走非强制 —— 服务端有缓存就先回（秒到），过期会在后台重算
-    @objc private func pull() { load(force: false) }
+    /// 下拉：**只读缓存** —— 不触发任何上游请求（卡券/余额由服务端每天定时刷 2 次）
+    @objc private func pull() { load(force: false, cacheOnly: true) }
 
-    /// 右上角「刷新」：强制重算（会真的去问中国移动，约 4~6 秒）
+    /// 右上角「强制刷新」：强制重算（会真的去问中国移动，约 4~6 秒）
     @objc private func forceReload() { load(force: true) }
 
     private func tap() {
@@ -78,7 +78,7 @@ final class AccountsViewController: UIViewController, UIGestureRecognizerDelegat
 
     // MARK: - 数据
 
-    func load(force: Bool) {
+    func load(force: Bool, cacheOnly: Bool = false) {
         guard !busy else { return }
         if items.isEmpty, let d = LocalStore.load("accounts_cache.json"),
            let arr = d["items"] as? [[String: Any]], !arr.isEmpty {
@@ -102,18 +102,18 @@ final class AccountsViewController: UIViewController, UIGestureRecognizerDelegat
                     return
                 }
                 Tsnet.shared.startIfNeeded { [weak self] in
-                    self?.fetchAccounts(force: force, retryAuth: true)
+                    self?.fetchAccounts(force: force, retryAuth: true, cacheOnly: cacheOnly)
                 }
             }
             return
         }
         Tsnet.shared.startIfNeeded { [weak self] in
-            self?.fetchAccounts(force: force, retryAuth: true)
+            self?.fetchAccounts(force: force, retryAuth: true, cacheOnly: cacheOnly)
         }
     }
 
-    private func fetchAccounts(force: Bool, retryAuth: Bool) {
-        Net.callPanel("/api/accounts", json: ["force": force],
+    private func fetchAccounts(force: Bool, retryAuth: Bool, cacheOnly: Bool = false) {
+        Net.callPanel("/api/accounts", json: ["force": force, "cache_only": cacheOnly],
                  timeout: 240) { [weak self] r in
             guard let self = self else { return }
             if case .failure(let e) = r, retryAuth,
@@ -162,7 +162,7 @@ final class AccountsViewController: UIViewController, UIGestureRecognizerDelegat
                 if let v = d["v"] as? String { AccountCache.lastVersion = v }
                 // ★ 2026-11-15：服务端先回了缓存（stale=true），后台正在重算 ——
                 //   5 秒后静默再拉一次，用户不用等就能看到最新值。
-                if (d["stale"] as? Bool) == true && self.staleRetry < 2 {
+                if (d["stale"] as? Bool) == true && !cacheOnly && self.staleRetry < 2 {
                     self.staleRetry += 1
                     DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
                         guard let self = self else { return }
