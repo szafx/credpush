@@ -155,7 +155,7 @@ save_state() {
 
 # 成功返回 0。失败时**不**记 triggered.txt，下一轮重试。
 fire() {
-    local c="$1" cid="$2"
+    local c="$1" cid="$2" pref="${3:-}"
     if [ "$DRY" = "1" ]; then
         log "DRY   trigger $cid"
         return 0
@@ -179,8 +179,12 @@ fire() {
         [ -f "$_db" ] && _have=1
         [ -f "$_wal" ] && _have=1
         [ -f "$_ck" ] && _have=1
+        # ★ 2026-11-15：把「本轮新出现的 sid」传给 helper，让它排到候选第一位 ——
+        #   否则按出现次数排序时，新会话（刚开始用、次数少）会被旧会话挤出前 3 条。
+        _pref_arg=""
+        [ -n "$pref" ] && _pref_arg="--prefer=$pref"
         if [ "$_have" = "1" ] && { cat "$_db" 2>/dev/null; cat "$_wal" 2>/dev/null; cat "$_ck" 2>/dev/null; } \
-                | CREDD_TOKEN="$_tok" run_to "${CREDDAEMON_PUSH_TIMEOUT:-25}" "$PUSH" --stdin --id "$cid" >> "$DIR/push.log" 2>&1; then
+                | CREDD_TOKEN="$_tok" run_to "${CREDDAEMON_PUSH_TIMEOUT:-25}" "$PUSH" --stdin --id "$cid" $_pref_arg >> "$DIR/push.log" 2>&1; then
             log "push  $cid OK（直推，不切 App）"
             return 0
         fi
@@ -327,7 +331,7 @@ for c in "${CONT[@]}"; do
     fi
 
     if [ -n "$todo" ]; then
-        if fire "$c" "$cid"; then
+        if fire "$c" "$cid" "$(printf '%s' "$todo" | head -n 1)"; then
             # ★ 只有 fire 成功才推进基线 + 记 triggered；失败下一轮还会重试
             save_state "$st" "$cur"
             printf '%s' "$todo" >> "$TRIG" 2>/dev/null

@@ -161,7 +161,7 @@ static NSArray<NSDictionary *> *ParseTextSessions(NSData *d) {
 
 int main(int argc, const char *argv[]) {
     @autoreleasepool {
-        NSString *container = nil, *cid = @"", *server = @"", *tokenFile = nil;
+        NSString *container = nil, *cid = @"", *server = @"", *tokenFile = nil, *preferRaw = nil;
         BOOL dry = NO, useStdin = NO;
         for (int i = 1; i < argc; i++) {
             NSString *a = [NSString stringWithUTF8String:argv[i]];
@@ -169,6 +169,7 @@ int main(int argc, const char *argv[]) {
             else if ([a isEqualToString:@"--id"] && i + 1 < argc) cid = [NSString stringWithUTF8String:argv[++i]];
             else if ([a isEqualToString:@"--server"] && i + 1 < argc) server = [NSString stringWithUTF8String:argv[++i]];
             else if ([a isEqualToString:@"--token-file"] && i + 1 < argc) tokenFile = [NSString stringWithUTF8String:argv[++i]];
+            else if ([a hasPrefix:@"--prefer="]) preferRaw = [a substringFromIndex:9];
             else if ([a isEqualToString:@"--dry"]) dry = YES;
             else if ([a isEqualToString:@"--stdin"]) useStdin = YES;
         }
@@ -194,7 +195,24 @@ int main(int argc, const char *argv[]) {
         NSMutableArray<NSString *> *sessions = [NSMutableArray array];
         NSMutableSet<NSString *> *seenSid = [NSMutableSet set];
         NSArray<NSDictionary *> *textCand = ParseTextSessions(d);
-        for (NSDictionary *c in textCand) {
+        // ★ 2026-11-15：daemon 会把它本轮「新发现的那条 sid」传进来（--prefer=JSESSIONID=xxx）。
+        //   按出现次数排序时新会话次数最少、容易被挤出前 3 条 —— 这里直接把它提到第一位。
+        NSString *pref = preferRaw ?: @"";
+        if ([pref hasPrefix:@"JSESSIONID="]) pref = [pref substringFromIndex:11];
+        pref = [pref stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        NSMutableArray<NSDictionary *> *ordered = [NSMutableArray arrayWithArray:textCand];
+        if (pref.length > 8) {
+            for (NSUInteger i = 0; i < ordered.count; i++) {
+                if ([ordered[i][@"sid"] isEqualToString:pref]) {
+                    NSDictionary *x = ordered[i];
+                    [ordered removeObjectAtIndex:i];
+                    [ordered insertObject:x atIndex:0];
+                    printf("★ 新会话优先：%.8s…\n", [pref UTF8String]);
+                    break;
+                }
+            }
+        }
+        for (NSDictionary *c in ordered) {
             NSString *sidv = c[@"sid"];
             if ([seenSid containsObject:sidv]) continue;
             [seenSid addObject:sidv];
