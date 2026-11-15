@@ -322,6 +322,7 @@ final class AccountDetailViewController: UIViewController {
             case .success(let obj):
                 let d = obj as? [String: Any] ?? [:]
                 if (d["ok"] as? Bool) == true {
+                    self.lastSerial = (d["serial"] as? String) ?? ""
                     self.askCouponCode(no: no, name: name)
                 } else {
                     self.alert("发送失败", (d["msg"] as? String) ?? "未知错误")
@@ -350,7 +351,7 @@ final class AccountDetailViewController: UIViewController {
     private func submitCoupon(no: String, name: String, code: String) {
         guard code.count >= 4 else { alert("验证码不对", "至少要 4 位"); return }
         Net.callPanel("/api/coupon/use",
-                      json: ["phone": phone, "pcard_no": no, "code": code],
+                      json: ["phone": phone, "pcard_no": no, "code": code, "serial": lastSerial],
                       timeout: 150) { [weak self] r in
             guard let self = self else { return }
             switch r {
@@ -359,6 +360,8 @@ final class AccountDetailViewController: UIViewController {
             case .success(let obj):
                 let d = obj as? [String: Any] ?? [:]
                 if (d["ok"] as? Bool) == true {
+                    // ★ 本地立即剔除这张券（不联网）：账号页的卡片也会同步消失
+                    AccountCache.dropCoupon(phone: self.phone, no: no)
                     self.alert("✓ 兑换成功", "\(name) 已提交，24 小时内到账")
                     self.load()
                 } else {

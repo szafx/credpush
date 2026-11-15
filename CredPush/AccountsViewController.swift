@@ -23,6 +23,16 @@ final class AccountsViewController: UIViewController, UIGestureRecognizerDelegat
         navigationItem.rightBarButtonItem = UIBarButtonItem(
             title: "强制刷新", style: .plain, target: self, action: #selector(forceReload))
         navigationItem.rightBarButtonItem?.tintColor = Theme.cyan
+        // ★ 兑换成功后本地剔除了一张券 → 直接用本地缓存重绘（不联网、不等刷新）
+        NotificationCenter.default.addObserver(forName: .accountsCacheChanged, object: nil,
+                                               queue: .main) { [weak self] _ in
+            guard let self = self else { return }
+            if let d = LocalStore.load("accounts_cache.json"),
+               let arr = d["items"] as? [[String: Any]], !arr.isEmpty {
+                self.items = arr
+                self.render()
+            }
+        }
 
         scroll.translatesAutoresizingMaskIntoConstraints = false
         scroll.alwaysBounceVertical = true

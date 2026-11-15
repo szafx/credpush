@@ -129,7 +129,33 @@ enum Cfg {
 }
 
 /// 「账号」页读到的最新快照，给「凭证」页判断「只推掉线的号」
+extension Notification.Name {
+    /// 本地账号缓存被改过（例如兑换成功后剔除了一张券）→ 账号页据此重绘，不联网
+    static let accountsCacheChanged = Notification.Name("AccountsCacheChanged")
+}
+
 enum AccountCache {
+    /// ★ 2026-11-15：兑换成功后**本地立即剔除**这张券 —— 不联网、不等刷新。
+    ///   失败的兑换不会调用这里，所以券会保留（符合预期）。
+    static func dropCoupon(phone: String, no: String) {
+        guard let d = LocalStore.load("accounts_cache.json"),
+              var items = d["items"] as? [[String: Any]] else { return }
+        var changed = false
+        for i in items.indices {
+            guard (items[i]["phone"] as? String) == phone else { continue }
+            if var cs = items[i]["coupons"] as? [[String: Any]] {
+                let before = cs.count
+                cs.removeAll { ($0["no"] as? String) == no }
+                if cs.count != before { items[i]["coupons"] = cs; changed = true }
+            }
+        }
+        guard changed else { return }
+        var nd = d
+        nd["items"] = items
+        LocalStore.save("accounts_cache.json", nd)
+        NotificationCenter.default.post(name: .accountsCacheChanged, object: nil)
+    }
+
     static var known: Set<String> = []
     static var dead: Set<String> = []
     /// phone -> 服务端当前持有的 App 会话 UID（扫描时比对该号有没有重新登录过）
