@@ -10,11 +10,11 @@ final class CredViewController: UIViewController {
         var phone: String
         var container: String
         var sessions: [FoundSession]
-        /// 额外说明（例如：会话在另一个容器里，而那个容器登记的是别的号）
-        var note: String = ""
         var status: Status
         var hasMatch: Bool
         var cacheBytes: Int64
+        /// 额外说明（例如：会话在另一个容器里，而那个容器登记的是别的号）
+        var note: String = ""
     }
 
     private var rows: [CredRow] = []
