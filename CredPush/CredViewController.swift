@@ -262,7 +262,7 @@ final class CredViewController: UIViewController {
                 rs.append(CredRow(phone: phone, container: c.path, sessions: sessions,
                                   status: st, hasMatch: hasMatch, cacheBytes: bytes,
                                   note: res.bySession
-                                      ? "容器登记的是 \(CredViewController.maskPhone(c.phone))，按会话识别为本号"
+                                      ? "容器登记的是 \(CredViewController.maskPhone(c.phone))（按会话 UID 认成本号）"
                                       : "",
                                   containerName: containerLabel(c.path),
                                   craneID: craneID(c.path),
@@ -569,7 +569,10 @@ final class CredViewController: UIViewController {
         case .notOnDevice: sub = "本机没有这个号的容器（可能在另一台 iPhone 上）"
         case .remoteOnly: sub = "服务端用的是现签会话（手机里没有这条）；在手机上打开一次该号会自动对齐"
         }
-            if !r.note.isEmpty { sub += " · " + r.note }
+            if !r.note.isEmpty {
+                // ★ 身份说明放最前面：后面的「最新会话 / 推送方式 / 缓存」可以被截断，这条不能
+                sub = r.note + " · " + sub
+            }
         }
         // ★ 2026-11-15：显示容器里「最新一条会话」的创建时间 —— 一眼看出最近有没有更新过
         if let newest = r.sessions.compactMap({ $0.createdAt }).max() {
