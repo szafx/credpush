@@ -40,6 +40,8 @@ final class Reacquire {
     private var cancelled = false
     /// 已被服务端拒绝的会话 UID（未登录的冷启动会话）—— 不再重复尝试
     private var rejected = Set<String>()
+    /// ★ 2026-11-16：同一会话「服务端还没生效」时的自动重试次数（20/40 秒）
+    private var retryTries = 0
     private var stageHandler: ((Stage, String) -> Void)?
 
     /// 超时后没抓到，记下来；回前台再续。
@@ -71,6 +73,7 @@ final class Reacquire {
         }
         cancelled = false
         rejected.removeAll()
+        retryTries = 0
         running = true
         stageHandler = stage
         LiveProgress.shared.start(name: name)
@@ -223,9 +226,24 @@ final class Reacquire {
                 self.endBackground()
                 self.running = false
                 self.pending = nil
+                self.retryTries = 0
                 stage(.done, "完成")
                 done(true, "已拿到新凭证（已自动推送）", fresh)
             } else {
+                // ★ 2026-11-16：会话刚生成时服务端可能还没生效（实测 27 秒被拒、41 秒成功）。
+                //   先隔 20/40 秒重试**同一条**；两次还不行才记 rejected、继续等新会话。
+                if self.retryTries < 2 {
+                    self.retryTries += 1
+                    stage(.reading, "会话可能还没生效，\(20 * self.retryTries) 秒后重试…")
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 20.0 * Double(self.retryTries)) { [weak self] in
+                        guard let self = self, !self.cancelled else { return }
+                        self.pushAndFinish(fresh, candidates: candidates, name: name, known: known,
+                                           allowNew: allowNew, deadline: deadline,
+                                           stage: stage, done: done)
+                    }
+                    return
+                }
+                self.retryTries = 0
                 // ★ 整批都不行：把这些 UID 全记为 rejected，**不要**反复重推同一批
                 //   （连续大量 appTokenLogin 可能触发服务端风控，2026-11-12 怀疑点之一）
                 for c in list { self.rejected.insert(c.uid) }
@@ -248,6 +266,10 @@ final class Reacquire {
         // ★ 不管容器此刻认不认得出，都要登记 —— 回前台后按「Crane 名字」再找一次。
         pending = (name, known, allowNew)
         AppLog.w("reacquire | 等待超时，等回前台续上（name=\(name)）")
+        // ★ 2026-11-16：iOS 后台只能活 ~30 秒，超时后要等用户切回 App；发一条本地通知，
+        //   用户还在中国移动里时也能在顶部看到该怎么做（否则就像"一直没反应"）。
+        Notifier.alert("登录完成后回到「移动工具集」",
+                       "还没拿到新凭证；切回本 App 会自动继续读取并推送。")
         // ★ 超时不收浮窗：用户可能还在登录，浮窗要留到「全部完成 / 主动取消」
         LiveProgress.shared.note("等待中 · 切回 App 继续")
         done(false, "还没等到新凭证 —— 切回 App 后会自动再检查", nil)

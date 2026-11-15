@@ -44,6 +44,8 @@ final class CredViewController: UIViewController {
     /// 最近一次推的那条会话（uid 拼起来的 key）——冷却按**会话**算，不是按时间一刀切：
     /// 10 分钟内如果中国移动又换发了新会话，照样要推。
     private var lastPushedKey: String = ""
+    /// ★ 2026-11-16：推送失败后自动重试同一批会话的次数（新会话刚生成时服务端可能还没生效）
+    private var pushRetryTries = 0
 
     // MARK: - UI
 
@@ -890,6 +892,21 @@ final class CredViewController: UIViewController {
                     self.toast(okN > 0 ? "已更新 \(okN) 个号" : "没有更新", ok: okN > 0)
                     // ★ 全部步骤结束（成功/失败都算任务收尾）：这时才收浮窗
                     LiveProgress.shared.end(okN > 0 ? "已完成" : "结束")
+                    if okN > 0 {
+                        self.pushRetryTries = 0
+                    } else if self.pushRetryTries < 2 {
+                        // ★ 2026-11-16：新会话刚生成时服务端可能还没生效（实测 27 秒被拒、41 秒成功）。
+                        //   自动隔 20/40 秒重试**同一批会话**；两次还不行才认输。
+                        self.pushRetryTries += 1
+                        let n = self.pushRetryTries
+                        self.statusLabel.text = "会话可能还没生效，\(20 * n) 秒后自动重试（\(n)/2）…"
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 20.0 * Double(n)) { [weak self] in
+                            guard let self = self, !self.busy else { return }
+                            self.pushSessions(sessions, allowNew: allowNew)
+                        }
+                    } else {
+                        self.pushRetryTries = 0
+                    }
                     completion?(okN > 0)
                 }
                 // 重新拉一次服务端状态

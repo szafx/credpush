@@ -102,7 +102,10 @@ enum Scanner {
 
     private static let reSess = try! NSRegularExpression(
         pattern: "JSESSIONID=([0-9a-fA-F-]{36});\\s*UID=([A-Za-z0-9]{20,})")
-    private static let reTicket = try! NSRegularExpression(pattern: "ticketID=([A-Za-z]{2,12})")
+    // ★ 2026-11-16：ticketID 可能是字母+数字（实测 15715811963 的会话是 `POD9`）。
+    //   原来只认纯字母，会把 POD9 截成 POD —— 推上去路由到错误的会话节点，
+    //   服务端一律判「APP登录状态已过期」。
+    private static let reTicket = try! NSRegularExpression(pattern: "ticketID=([A-Za-z0-9]{2,16})")
 
     /// 读一个容器的三个会话来源（Cache.db-wal / Cache.db / Cookies.binarycookies）
     static func readSessions(container: String, phone: String,
