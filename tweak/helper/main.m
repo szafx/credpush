@@ -10,8 +10,12 @@
 //
 // 做的事：
 //   1. 解析 <container>/Library/Cookies/Cookies.binarycookies（结构化，带创建时间）
-//   2. 取 10086 域的 JSESSIONID/UID/Comment/ticketID，按 **cookie 创建时间** 挑最新一组
-//   3. POST <server>/api/cred/push（带 X-Cred-Token）
+//   2. ★ 2026-11-15：再从 **stdin 的混合数据**（binarycookies + Cache.db-wal/Cache.db 尾部）
+//      里按文本提取 JSESSIONID/UID/ticketID/Comment —— 实测容器的 binarycookies 里
+//      根本没有 10086 的会话（只有 cmicapm 两条），会话全在 Cache.db 里。
+//      旧版只解析 binarycookies，所以直推永远报「会话不完整」、只能回退拉起 App。
+//   3. 多条候选**一次带上**（服务端逐条试、第一条成功即停），按新→旧排序
+//   4. POST <server>/api/cred/push（带 X-Cred-Token）
 //
 // 安装位置：/var/jb/usr/libexec/credpush-helper（不要 /usr/local/bin —— roothide 会注入）
 
@@ -91,6 +95,59 @@ static NSDictionary *Newest(NSArray<NSDictionary *> *cs, NSString *name) {
     return best;
 }
 
+// ---- 从混合数据里按文本找 `name=value`（取离 center 最近的一处）----
+static NSString *NearestField(NSString *win, NSUInteger center, NSString *name) {
+    NSString *pat = [NSString stringWithFormat:@"\\b%@=([^;,&\\s\"'<>\\\\]+)", name];
+    NSRegularExpression *re = [NSRegularExpression regularExpressionWithPattern:pat options:0 error:nil];
+    if (!re) return nil;
+    __block NSUInteger bestDist = NSUIntegerMax;
+    __block NSRange best = NSMakeRange(NSNotFound, 0);
+    [re enumerateMatchesInString:win options:0 range:NSMakeRange(0, win.length)
+                      usingBlock:^(NSTextCheckingResult *m, NSMatchingFlags f, BOOL *stop) {
+        if (m.numberOfRanges < 2) return;
+        NSRange r = [m rangeAtIndex:1];
+        NSUInteger loc = m.range.location;
+        NSUInteger dist = (loc > center) ? (loc - center) : (center - loc);
+        if (dist < bestDist) { bestDist = dist; best = r; }
+    }];
+    if (best.location == NSNotFound) return nil;
+    return [win substringWithRange:best];
+}
+
+// 返回 [{sid, uid, tick, comm, pos}] —— 从 Cache.db 的 Cookie 头里抠会话
+static NSArray<NSDictionary *> *ParseTextSessions(NSData *d) {
+    NSMutableArray<NSDictionary *> *cand = [NSMutableArray array];
+    if (d.length == 0) return cand;
+    NSString *hay = [[NSString alloc] initWithData:d encoding:NSISOLatin1StringEncoding];
+    if (hay.length == 0) return cand;
+    NSString *sidPat = @"JSESSIONID=([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})";
+    NSRegularExpression *re = [NSRegularExpression regularExpressionWithPattern:sidPat options:0 error:nil];
+    if (!re) return cand;
+    NSMutableSet<NSString *> *seen = [NSMutableSet set];
+    for (NSTextCheckingResult *m in [re matchesInString:hay options:0 range:NSMakeRange(0, hay.length)]) {
+        NSString *sid = [hay substringWithRange:[m rangeAtIndex:1]];
+        if ([seen containsObject:sid]) continue;
+        NSUInteger center = m.range.location;
+        NSUInteger from = (center > 4000) ? (center - 4000) : 0;
+        NSUInteger to = MIN(hay.length, center + 1200);
+        NSString *win = [hay substringWithRange:NSMakeRange(from, to - from)];
+        NSUInteger wc = center - from;
+        NSString *uid  = NearestField(win, wc, @"UID");
+        NSString *tick = NearestField(win, wc, @"ticketID") ?: NearestField(win, wc, @"ticketId");
+        NSString *comm = NearestField(win, wc, @"Comment");
+        if (uid.length == 0) continue;      // 没 UID 的组不完整，跳过
+        [seen addObject:sid];
+        [cand addObject:@{@"sid": sid, @"uid": uid,
+                          @"tick": tick ?: @"", @"comm": comm ?: @"SessionServer-unity",
+                          @"pos": @(center)}];
+    }
+    // 越靠后（Cache.db 尾部）越新
+    [cand sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+        return [b[@"pos"] compare:a[@"pos"]];
+    }];
+    return cand;
+}
+
 int main(int argc, const char *argv[]) {
     @autoreleasepool {
         NSString *container = nil, *cid = @"", *server = @"", *tokenFile = nil;
@@ -122,26 +179,43 @@ int main(int argc, const char *argv[]) {
             if (!d) { printf("读不到 cookies: %s\n", cf.UTF8String); return 3; }
         }
 
+        // ---- ① 文本候选（Cache.db 里的 Cookie 头，最新在前）----
+        NSMutableArray<NSString *> *sessions = [NSMutableArray array];
+        NSMutableSet<NSString *> *seenSid = [NSMutableSet set];
+        NSArray<NSDictionary *> *textCand = ParseTextSessions(d);
+        for (NSDictionary *c in textCand) {
+            NSString *sidv = c[@"sid"];
+            if ([seenSid containsObject:sidv]) continue;
+            [seenSid addObject:sidv];
+            [sessions addObject:[NSString stringWithFormat:
+                @"JSESSIONID=%@; UID=%@; Comment=%@; ticketID=%@;",
+                sidv, c[@"uid"], c[@"comm"], c[@"tick"]]];
+            if (sessions.count >= 3) break;      // 服务端最多试 3 条
+        }
+        printf("文本候选 %lu 条\n", (unsigned long)textCand.count);
+
+        // ---- ② binarycookies 候选（有 10086 会话的容器才用得上）----
         NSArray<NSDictionary *> *cs = ParseCookies(d);
-        NSDictionary *sid = Newest(cs, @"JSESSIONID");
-        NSDictionary *uid = Newest(cs, @"UID");
-        NSDictionary *tick = Newest(cs, @"ticketID");
-        NSDictionary *comm = Newest(cs, @"Comment");
-        if (!sid || !uid || !tick) {
-            printf("会话不完整（sid=%d uid=%d ticket=%d）\n", sid != nil, uid != nil, tick != nil);
+        NSDictionary *bsid = Newest(cs, @"JSESSIONID");
+        NSDictionary *buid = Newest(cs, @"UID");
+        NSDictionary *btick = Newest(cs, @"ticketID");
+        NSDictionary *bcomm = Newest(cs, @"Comment");
+        if (bsid && buid && btick && ![seenSid containsObject:bsid[@"value"]] && sessions.count < 3) {
+            [sessions addObject:[NSString stringWithFormat:
+                @"JSESSIONID=%@; UID=%@; Comment=%@; ticketID=%@;",
+                bsid[@"value"], buid[@"value"],
+                bcomm[@"value"] ?: @"SessionServer-unity", btick[@"value"]]];
+        }
+        if (sessions.count == 0) {
+            printf("会话不完整（文本 %lu 条 / binarycookies sid=%d uid=%d ticket=%d）\n",
+                   (unsigned long)textCand.count, bsid != nil, buid != nil, btick != nil);
             return 4;
         }
-        NSString *comment = comm[@"value"] ?: @"SessionServer-unity";
-        NSString *sess = [NSString stringWithFormat:@"JSESSIONID=%@; UID=%@; Comment=%@; ticketID=%@;",
-                          sid[@"value"], uid[@"value"], comment, tick[@"value"]];
-        NSDate *cd = [NSDate dateWithTimeIntervalSince1970:[sid[@"created"] doubleValue]];
-        NSDateFormatter *df = [NSDateFormatter new];
-        df.dateFormat = @"MM-dd HH:mm:ss";
-        printf("容器=%s sid=%.8s… uid=%.8s… ticket=%s 创建=%s\n",
+        printf("容器=%s 候选 %lu 条：\n",
                [[cid substringToIndex:MIN((NSUInteger)8, cid.length)] UTF8String],
-               [sid[@"value"] UTF8String], [uid[@"value"] UTF8String],
-               [tick[@"value"] UTF8String],
-               [[df stringFromDate:cd] UTF8String]);
+               (unsigned long)sessions.count);
+        for (NSString *x in sessions) printf("  %.64s…\n", [x UTF8String]);
+        NSString *sess = sessions[0];
 
         // 令牌：环境变量优先（daemon 读文件后传进来），其次才读文件
         NSString *token = [(NSProcessInfo.processInfo.environment[@"CREDD_TOKEN"] ?: @"")
@@ -157,7 +231,7 @@ int main(int argc, const char *argv[]) {
             return 0;
         }
 
-        NSData *body = [NSJSONSerialization dataWithJSONObject:@{@"sessions": @[sess]} options:0 error:nil];
+        NSData *body = [NSJSONSerialization dataWithJSONObject:@{@"sessions": sessions} options:0 error:nil];
         NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:
                                     [NSURL URLWithString:[server stringByAppendingString:@"/api/cred/push"]]];
         req.HTTPMethod = @"POST";
