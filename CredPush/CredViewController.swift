@@ -466,6 +466,20 @@ final class CredViewController: UIViewController {
         case .notOnDevice: sub = "本机没有这个号的容器（可能在另一台 iPhone 上）"
         case .remoteOnly: sub = "服务端用的是现签会话（手机里没有这条）；在手机上打开一次该号会自动对齐"
         }
+        // ★ 2026-11-15：显示容器里「最新一条会话」的创建时间 —— 一眼看出最近有没有更新过
+        if let newest = r.sessions.compactMap({ $0.createdAt }).max() {
+            let df = DateFormatter()
+            df.dateFormat = "MM-dd HH:mm"
+            let mins = Int(max(0, Date().timeIntervalSince(newest)) / 60)
+            let ago: String
+            if mins < 1 { ago = "刚刚" }
+            else if mins < 60 { ago = "\(mins) 分钟前" }
+            else if mins < 60 * 24 { ago = "\(mins / 60) 小时前" }
+            else { ago = "\(mins / (60 * 24)) 天前" }
+            sub += " · 最新会话 \(df.string(from: newest))（\(ago)）"
+        } else if !r.sessions.isEmpty {
+            sub += " · 最新会话时间未知"
+        }
         if r.cacheBytes > 0 {
             sub += " · 缓存 " + CacheCleaner.fmt(r.cacheBytes)
         }
