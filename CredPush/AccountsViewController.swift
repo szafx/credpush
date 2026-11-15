@@ -13,6 +13,8 @@ final class AccountsViewController: UIViewController, UIGestureRecognizerDelegat
     private var busy = false
     private var acting = false
     private var lastLoaded: Date?
+    /// 服务端返回 stale=true 时，自动补拉几次（拿到后台刚算好的新数据）
+    private var staleRetry = 0
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -158,6 +160,17 @@ final class AccountsViewController: UIViewController, UIGestureRecognizerDelegat
                     }
                 }
                 if let v = d["v"] as? String { AccountCache.lastVersion = v }
+                // ★ 2026-11-15：服务端先回了缓存（stale=true），后台正在重算 ——
+                //   5 秒后静默再拉一次，用户不用等就能看到最新值。
+                if (d["stale"] as? Bool) == true && self.staleRetry < 2 {
+                    self.staleRetry += 1
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
+                        guard let self = self else { return }
+                        if !self.busy { self.load(force: false) }
+                    }
+                } else if (d["stale"] as? Bool) != true {
+                    self.staleRetry = 0
+                }
                 AccountCache.updated = Date()
                 LocalStore.save("accounts_cache.json", d)
                 let newly = AccountCache.dead.subtracting(AccountCache.notifiedDead)
