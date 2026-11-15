@@ -70,7 +70,11 @@ enum Net {
                 return
             }
             let isLast = (i == bases.count - 1)
-            let t = isLast ? timeout : min(8, timeout)   // 中转线路常要 4~6 秒，4 秒太短
+            // ★ 2026-11-15：重接口（/api/accounts 服务端要逐个号登录，实测 4~6 秒）
+            //   不能套 8 秒的「换线路」超时，否则主线路白白超时再回退，白等 8 秒。
+            let heavy = path.hasPrefix("/api/accounts")
+            let cap: TimeInterval = heavy ? 30 : 8
+            let t = isLast ? timeout : min(cap, timeout)
             let t0 = Date()
             call(bases[i] + path, method: method, json: json, headers: headers, timeout: t) { r in
                 let ms = Int(Date().timeIntervalSince(t0) * 1000)
