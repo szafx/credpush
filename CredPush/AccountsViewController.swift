@@ -85,6 +85,22 @@ final class AccountsViewController: UIViewController, UIGestureRecognizerDelegat
         // ★ 先直接查：面板 cookie 有效期 30 天，通常不用每次重新登录。
         //   只有 401 才去 /api/auth，省掉一次跨 Cloudflare 的往返（实测约 2~3 秒）。
         // 连内置 Tailscale 最多等 6 秒；没配授权码就立刻放行，不影响正常使用。
+        if !force {
+            // ★ 先拉轻量 /api/state；状态没变就不拉全量（省 4 秒 + 一轮上游登录）
+            AccountCache.quickUnchanged { [weak self] same in
+                guard let self = self else { return }
+                if same && !self.items.isEmpty {
+                    self.setBusy(false)
+                    self.hint.text = "状态没变，未重新拉取"
+                    self.render()
+                    return
+                }
+                Tsnet.shared.startIfNeeded { [weak self] in
+                    self?.fetchAccounts(force: force, retryAuth: true)
+                }
+            }
+            return
+        }
         Tsnet.shared.startIfNeeded { [weak self] in
             self?.fetchAccounts(force: force, retryAuth: true)
         }
@@ -128,6 +144,16 @@ final class AccountsViewController: UIViewController, UIGestureRecognizerDelegat
                 AccountCache.dead = Set(self.items.filter {
                     !((($0["err"] as? String) ?? "").isEmpty)
                 }.compactMap { $0["phone"] as? String })
+                // ★ 2026-11-15：会话来源 + 服务端存活 + 状态版本号
+                AccountCache.source = [:]
+                AccountCache.alive = [:]
+                for it in self.items {
+                    if let ph = it["phone"] as? String {
+                        if let sc = it["app_uid_source"] as? String, !sc.isEmpty { AccountCache.source[ph] = sc }
+                        if let al = it["server_session_alive"] as? Bool { AccountCache.alive[ph] = al }
+                    }
+                }
+                if let v = d["v"] as? String { AccountCache.lastVersion = v }
                 AccountCache.updated = Date()
                 LocalStore.save("accounts_cache.json", d)
                 let newly = AccountCache.dead.subtracting(AccountCache.notifiedDead)

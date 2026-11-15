@@ -137,11 +137,40 @@ enum AccountCache {
     /// phone -> 服务端当前持有的 JSESSIONID 前 8 位（**只用于给 creddaemon 写提示**）。
     /// 服务端没给这个字段时为空，提示文件就不写，行为跟以前一样。
     static var sid8: [String: String] = [:]
+    /// phone -> 会话来源（app=手机容器 / mint=服务端现签）
+    static var source: [String: String] = [:]
+    /// phone -> 服务端侧会话是否还活着（来自续期日志；缺省 true）
+    static var alive: [String: Bool] = [:]
+    /// /api/state 的版本号（用来跳过全量刷新）
+    static var lastVersion: String = ""
     static var updated: Date?
     /// 已经推送过本地通知的掉线集合（避免重复弹）
     static var notifiedDead: Set<String> = []
 
     /// 需要时主动拉一次账号状态（凭证页没进过「账号」页时用）
+    /// 先拉轻量 /api/state：true = 状态没变，调用方可以跳过 /api/accounts
+    /// （全量接口要 4 秒且会逐个号登录；state 只要几十毫秒、零上游请求）
+    static func quickUnchanged(completion: @escaping (Bool) -> Void) {
+        Net.callPanel("/api/state", json: [:], timeout: 15) { r in
+            guard case .success(let obj) = r, let d = obj as? [String: Any],
+                  let v = d["v"] as? String, !v.isEmpty else { completion(false); return }
+            if let items = d["items"] as? [[String: Any]] {
+                var s2: [String: String] = [:]
+                var a2: [String: Bool] = [:]
+                for it in items {
+                    guard let ph = it["phone"] as? String else { continue }
+                    if let sc = it["source"] as? String, !sc.isEmpty { s2[ph] = sc }
+                    if let al = it["alive"] as? Bool { a2[ph] = al }
+                }
+                source = s2
+                alive = a2
+            }
+            let same = (v == lastVersion) && !known.isEmpty
+            lastVersion = v
+            completion(same)
+        }
+    }
+
     static func refresh(completion: @escaping () -> Void) {
         func fetch(_ retry: Bool) {
             Net.callPanel("/api/accounts", json: ["force": false], timeout: 90) { r in
@@ -165,6 +194,17 @@ enum AccountCache {
                             sid8[ph] = s
                         }
                     }
+                    // ★ 2026-11-15：会话来源 + 服务端存活（现签会话在手机容器里没有，
+                    //    凭证页据此显示「服务器侧有效」而不是「新会话」）
+                    source = [:]
+                    alive = [:]
+                    for it in items {
+                        if let ph = it["phone"] as? String {
+                            if let sc = it["app_uid_source"] as? String, !sc.isEmpty { source[ph] = sc }
+                            if let al = it["server_session_alive"] as? Bool { alive[ph] = al }
+                        }
+                    }
+                    if let v = d["v"] as? String { lastVersion = v }
                     dead = Set(items.filter {
                         !((($0["err"] as? String) ?? "").isEmpty)
                     }.compactMap { $0["phone"] as? String })

@@ -6,7 +6,7 @@ final class CredViewController: UIViewController {
     // MARK: - 数据
 
     struct CredRow {
-        enum Status { case upToDate, changed, expired, noSession, newAccount, notOnDevice }
+        enum Status { case upToDate, changed, expired, noSession, newAccount, notOnDevice, remoteOnly }
         var phone: String
         var container: String
         var sessions: [FoundSession]
@@ -178,9 +178,14 @@ final class CredViewController: UIViewController {
                 let hasMatch = !serverUid.isEmpty && sessions.contains { $0.uid == serverUid }
                 let known = AccountCache.known.contains(c.phone)
                 let dead = AccountCache.dead.contains(c.phone)
+                // ★ 2026-11-15：服务端可能持有「现签会话」（模板铸出来的，手机容器里没有）。
+                //   这种情况不该显示成「新会话」，而是「服务器侧有效」。
+                let srcMint = ((AccountCache.source[c.phone] ?? "app") == "mint")
+                let aliveOK = (AccountCache.alive[c.phone] ?? true)
                 let st: CredRow.Status
                 if sessions.isEmpty { st = .noSession }
                 else if !known { st = .newAccount }
+                else if !hasMatch && srcMint && aliveOK { st = .remoteOnly }
                 else if !hasMatch { st = .changed }   // ★ 容器里有服务端不认识的会话 → 可以推
                 else if dead { st = .expired }        // 容器里就是服务端那份，但服务端说它死了
                 else { st = .upToDate }
@@ -202,7 +207,8 @@ final class CredViewController: UIViewController {
                     case .newAccount: return 2
                     case .noSession: return 3
                     case .upToDate: return 4
-                    case .notOnDevice: return 5
+                    case .remoteOnly: return 5
+                    case .notOnDevice: return 6
                     }
                 }
                 if rank(a.status) != rank(b.status) { return rank(a.status) < rank(b.status) }
@@ -441,6 +447,7 @@ final class CredViewController: UIViewController {
             case .noSession: return ("没有会话", Theme.dim)
             case .newAccount: return ("新账号", Theme.cyan)
             case .notOnDevice: return ("在其它设备", Theme.dim)
+            case .remoteOnly: return ("服务器侧有效", Theme.green)
             }
         }()
 
@@ -457,6 +464,7 @@ final class CredViewController: UIViewController {
             ? "容器还没登录完成（登录成功后会自动识别手机号）"
             : "服务端还没登记这个号"
         case .notOnDevice: sub = "本机没有这个号的容器（可能在另一台 iPhone 上）"
+        case .remoteOnly: sub = "服务端用的是现签会话（手机里没有这条）；在手机上打开一次该号会自动对齐"
         }
         if r.cacheBytes > 0 {
             sub += " · 缓存 " + CacheCleaner.fmt(r.cacheBytes)
@@ -504,7 +512,7 @@ final class CredViewController: UIViewController {
         var out: [UIView] = []
         let canReacquire = Crane.available() && !r.container.isEmpty
         switch r.status {
-        case .expired, .changed, .noSession:
+        case .expired, .changed, .noSession, .remoteOnly:
             if canReacquire {
                 out.append(smallButton("重新获取", Theme.cyan, #selector(doReacquire(_:)),
                                        tag: r.phone))
