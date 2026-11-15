@@ -44,8 +44,13 @@ enum UpdateChecker {
 
     private static func checkResult(_ d: [String: Any], in presenter: UIViewController) {
         guard let build = d["build"] as? Int, build > currentBuild() else { return }
-        let urlStr = (d["url"] as? String) ?? ""
+        let urlPanel = (d["url"] as? String) ?? ""
+        let urlGitee = (d["url_gitee"] as? String) ?? ""
+        // ★ 2026-11-15：服务端已给出 Gitee 的签名 CDN 直链，优先用它 ——
+        //   省掉「面板 /dl → 302」这一跳（面板线路往往比 CDN 慢），且不内嵌任何 token。
+        let urlStr = urlGitee.isEmpty ? urlPanel : urlGitee
         let notes = (d["notes"] as? String) ?? ""
+        AppLog.w("update | 下载源：" + (urlGitee.isEmpty ? "面板" : "Gitee 直链"))
         guard !urlStr.isEmpty else { return }
 
         // 点过「稍后」的版本 6 小时内不再烦人
