@@ -124,6 +124,11 @@ static NSArray<NSDictionary *> *ParseTextSessions(NSData *d) {
     NSRegularExpression *re = [NSRegularExpression regularExpressionWithPattern:sidPat options:0 error:nil];
     if (!re) return cand;
     NSMutableSet<NSString *> *seen = [NSMutableSet set];
+    NSMutableDictionary<NSString *, NSNumber *> *counts = [NSMutableDictionary dictionary];
+    for (NSTextCheckingResult *m in [re matchesInString:hay options:0 range:NSMakeRange(0, hay.length)]) {
+        NSString *sidAll = [hay substringWithRange:[m rangeAtIndex:1]];
+        counts[sidAll] = @([counts[sidAll] integerValue] + 1);
+    }
     for (NSTextCheckingResult *m in [re matchesInString:hay options:0 range:NSMakeRange(0, hay.length)]) {
         NSString *sid = [hay substringWithRange:[m rangeAtIndex:1]];
         if ([seen containsObject:sid]) continue;
@@ -139,10 +144,15 @@ static NSArray<NSDictionary *> *ParseTextSessions(NSData *d) {
         [seen addObject:sid];
         [cand addObject:@{@"sid": sid, @"uid": uid,
                           @"tick": tick ?: @"", @"comm": comm ?: @"SessionServer-unity",
-                          @"pos": @(center)}];
+                          @"pos": @(center),
+                          @"n": counts[sid] ?: @(0)}];
     }
-    // 越靠后（Cache.db 尾部）越新
+    // 排序：① 出现≥2 次的优先（只出现 1 次的多半是陈旧/误配的会话）；
+    //       ② 同档内位置越靠后（越接近文件尾部）越新
     [cand sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+        BOOL aLive = [a[@"n"] integerValue] >= 2;
+        BOOL bLive = [b[@"n"] integerValue] >= 2;
+        if (aLive != bLive) return aLive ? NSOrderedAscending : NSOrderedDescending;
         return [b[@"pos"] compare:a[@"pos"]];
     }];
     return cand;
