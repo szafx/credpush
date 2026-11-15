@@ -15,6 +15,21 @@ final class CredViewController: UIViewController {
         var cacheBytes: Int64
         /// 额外说明（例如：会话在另一个容器里，而那个容器登记的是别的号）
         var note: String = ""
+        /// ★ 2026-11-15：这一行属于哪个容器（「默认容器」/ Crane 里起的名字）——
+        ///   两行同号时靠它区分
+        var containerName: String = ""
+        /// ★ 2026-11-15：容器在 Crane 里的 id（DEFAULT / UUID）。切容器、清空数据都按 id，
+        ///   不再拿手机号去猜（默认容器的 Crane 名字不一定等于行里的号）
+        var craneID: String = ""
+        /// ★ 2026-11-15：容器 plist 里登记的号码（可能和实际会话不一致）
+        var plistPhone: String = ""
+        /// ★ 2026-11-15：这一行的号是按「会话 UID」认出来的，不是 plist 登记的
+        var identityBySession: Bool = false
+    }
+
+    /// 138 **** 1234
+    static func maskPhone(_ p: String) -> String {
+        p.count >= 7 ? "\(p.prefix(3)) **** \(p.suffix(4))" : p
     }
 
     private var rows: [CredRow] = []
@@ -88,7 +103,11 @@ final class CredViewController: UIViewController {
     /// 从中国移动切回本 App：上次没等到的，这里续上
     @objc private func handleBecameActive() {
         resumePendingIfAny()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.scan() }
+        // ★ 2026-11-15：回前台先用 /api/state 刷一次 uid / source / alive（几十毫秒），再扫。
+        //   否则凭证页会拿旧的服务端 UID 去比，把已经同步好的会话误报成「会话已更新」。
+        AccountCache.quickUnchanged { [weak self] _ in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.scan() }
+        }
     }
 
     /// 守护进程（creddaemon）发现新会话 → 拉起 App 补抓
@@ -173,27 +192,65 @@ final class CredViewController: UIViewController {
             let craneNames = Dictionary(uniqueKeysWithValues: Crane.list().map { ($0.id, $0.name) })
             func containerLabel(_ path: String) -> String {
                 if path.isEmpty { return "" }
-                if !path.contains("/___Crane_Containers/") { return "默认" }
+                if !path.contains("/___Crane_Containers/") { return "默认容器" }
                 let cid = (path as NSString).lastPathComponent
                 return craneNames[cid] ?? String(cid.prefix(8))
             }
+            /// 容器在 Crane 里的 id（DEFAULT / UUID）—— 切容器、清空数据都按它定位
+            func craneID(_ path: String) -> String {
+                if path.isEmpty { return "" }
+                if !path.contains("/___Crane_Containers/") { return "DEFAULT" }
+                return (path as NSString).lastPathComponent
+            }
+            // 扫描在后台线程跑：先把账号状态拷一份，避免和前台刷新打架
+            let knownSet = AccountCache.known
+            let deadSet = AccountCache.dead
+            let srcMap = AccountCache.source
+            let aliveMap = AccountCache.alive
+            let uidMap = AccountCache.uid
+
+            /// 这一组会话里，哪个服务端账号的 UID 命中得最多（用来判断容器真正的身份）
+            func resolvePhone(_ sessions: [FoundSession], fallback: String) -> (phone: String, bySession: Bool) {
+                var best = "", bestCount = 0
+                for (ph, su) in uidMap where !su.isEmpty {
+                    let n = sessions.filter { $0.uid == su }.count
+                    if n == 0 { continue }
+                    if n > bestCount || (n == bestCount && ph == fallback) {
+                        bestCount = n; best = ph
+                    }
+                }
+                if best.isEmpty { return (fallback, false) }
+                return (best, best != fallback)
+            }
+
             var rs: [CredRow] = []
             var onDevice = Set<String>()
-            var uidContainer: [String: String] = [:]   // uid -> 容器路径（跨容器认领用）
+            // ★ 2026-11-15：uid -> (容器路径, 命中次数)。跨容器认领取「命中最多」的那个；
+            //   以前是后写覆盖，会把 180 的会话归到最后一个恰好出现过它的容器上。
+            var uidContainer: [String: (path: String, count: Int)] = [:]
+
             for c in containers {
                 // ★ 只有「真正添加成功」的号才显示：UserPhone 为空 = 没登录完成，
                 //   这些空容器（重复点新增账号留下的）一律不进列表。
                 if c.phone.isEmpty { continue }
                 let sessions = Scanner.readSessions(container: c.path, phone: c.phone)
-                for se in sessions where !se.uid.isEmpty { uidContainer[se.uid] = c.path }
-                let serverUid = AccountCache.uid[c.phone] ?? ""
+                for se in sessions where !se.uid.isEmpty {
+                    let n = sessions.filter { $0.uid == se.uid }.count
+                    if let prev = uidContainer[se.uid], prev.count >= n { continue }
+                    uidContainer[se.uid] = (path: c.path, count: n)
+                }
+                // ★ 2026-11-15：容器的身份按「会话 UID」认，而不是只信 plist 的 UserPhone。
+                //   典型：默认容器 plist 写着 153、里面其实是 180 的会话 → 以前会多出一行假 153。
+                let res = resolvePhone(sessions, fallback: c.phone)
+                let phone = res.phone
+                let serverUid = uidMap[phone] ?? ""
                 let hasMatch = !serverUid.isEmpty && sessions.contains { $0.uid == serverUid }
-                let known = AccountCache.known.contains(c.phone)
-                let dead = AccountCache.dead.contains(c.phone)
+                let known = knownSet.contains(phone)
+                let dead = deadSet.contains(phone)
                 // ★ 2026-11-15：服务端可能持有「现签会话」（模板铸出来的，手机容器里没有）。
                 //   这种情况不该显示成「新会话」，而是「服务器侧有效」。
-                let srcMint = ((AccountCache.source[c.phone] ?? "app") == "mint")
-                let aliveOK = (AccountCache.alive[c.phone] ?? true)
+                let srcMint = ((srcMap[phone] ?? "app") == "mint")
+                let aliveOK = (aliveMap[phone] ?? true)
                 let st: CredRow.Status
                 if sessions.isEmpty { st = .noSession }
                 else if !known { st = .newAccount }
@@ -202,22 +259,31 @@ final class CredViewController: UIViewController {
                 else if dead { st = .expired }        // 容器里就是服务端那份，但服务端说它死了
                 else { st = .upToDate }
                 let bytes = CacheCleaner.size(CacheCleaner.cacheDir(c.path))
-                rs.append(CredRow(phone: c.phone, container: c.path, sessions: sessions,
-                                  status: st, hasMatch: hasMatch, cacheBytes: bytes))
-                if !c.phone.isEmpty { onDevice.insert(c.phone) }
+                rs.append(CredRow(phone: phone, container: c.path, sessions: sessions,
+                                  status: st, hasMatch: hasMatch, cacheBytes: bytes,
+                                  note: res.bySession
+                                      ? "容器登记的是 \(CredViewController.maskPhone(c.phone))，按会话识别为本号"
+                                      : "",
+                                  containerName: containerLabel(c.path),
+                                  craneID: craneID(c.path),
+                                  plistPhone: c.phone,
+                                  identityBySession: res.bySession))
+                onDevice.insert(phone)
             }
             // 服务端有、本机没有「登记为该号」的容器
             // ★ 2026-11-15：先按 UID 跨容器认领 —— 用户把某个容器切成别的号后，
             //   原号的会话常常还留在那个容器里，不能因此判成「在其它设备」。
-            for ph in AccountCache.known.sorted() where !onDevice.contains(ph) {
-                let su = AccountCache.uid[ph] ?? ""
-                let srcMint = ((AccountCache.source[ph] ?? "app") == "mint")
-                let aliveOK = (AccountCache.alive[ph] ?? true)
-                if !su.isEmpty, let cp = uidContainer[su] {
-                    rs.append(CredRow(phone: ph, container: cp, sessions: [],
+            for ph in knownSet.sorted() where !onDevice.contains(ph) {
+                let su = uidMap[ph] ?? ""
+                let srcMint = ((srcMap[ph] ?? "app") == "mint")
+                let aliveOK = (aliveMap[ph] ?? true)
+                if !su.isEmpty, let hit = uidContainer[su] {
+                    rs.append(CredRow(phone: ph, container: hit.path, sessions: [],
                                       status: srcMint ? .remoteOnly : .upToDate,
                                       hasMatch: true, cacheBytes: 0,
-                                      note: "会话在「\(containerLabel(cp))」容器里（该容器登记的是别的号）"))
+                                      note: "会话在「\(containerLabel(hit.path))」里（按 UID 归到别的号）",
+                                      containerName: containerLabel(hit.path),
+                                      craneID: craneID(hit.path)))
                 } else if srcMint && aliveOK {
                     rs.append(CredRow(phone: ph, container: "", sessions: [],
                                       status: .remoteOnly, hasMatch: false, cacheBytes: 0))
@@ -464,8 +530,7 @@ final class CredViewController: UIViewController {
 
     private func rowCard(_ r: CredRow) -> UIView {
         let v = Theme.card(14)
-        let masked = r.phone.count >= 7 ? "\(r.phone.prefix(3)) **** \(r.phone.suffix(4))"
-            : (r.phone.isEmpty ? "(未命名容器)" : r.phone)
+        let masked = r.phone.isEmpty ? "(未命名容器)" : CredViewController.maskPhone(r.phone)
         let (text, color): (String, UIColor) = {
             switch r.status {
             case .upToDate: return ("已是最新", Theme.green)
@@ -478,11 +543,21 @@ final class CredViewController: UIViewController {
             }
         }()
 
-        let head = Theme.hstack([Theme.dot(color), Theme.label(masked, size: 15, weight: .semibold, mono: true),
-                                 Theme.spacer(), Theme.pill(text, color: color)], spacing: 8)
+        var headViews: [UIView] = [Theme.dot(color),
+                                   Theme.label(masked, size: 15, weight: .semibold, mono: true)]
+        // ★ 2026-11-15：把容器名带上（默认容器 / Crane 名）—— 两行同号时一眼分得清
+        if !r.containerName.isEmpty && r.containerName != r.phone {
+            headViews.append(Theme.label(r.containerName, size: 11, color: Theme.dim))
+        }
+        headViews.append(Theme.spacer())
+        headViews.append(Theme.pill(text, color: color))
+        let head = Theme.hstack(headViews, spacing: 8)
 
-        var sub = r.note
-        if sub.isEmpty {
+        var sub: String
+        if r.sessions.isEmpty && !r.note.isEmpty {
+            // 跨容器认领的行：没有会话可数，直接说它在哪个容器里
+            sub = r.note
+        } else {
         switch r.status {
         case .upToDate: sub = "\(r.sessions.count) 条会话（服务端那份在）"
         case .changed: sub = "\(r.sessions.count) 条会话，但都不是服务端那份"
@@ -494,6 +569,7 @@ final class CredViewController: UIViewController {
         case .notOnDevice: sub = "本机没有这个号的容器（可能在另一台 iPhone 上）"
         case .remoteOnly: sub = "服务端用的是现签会话（手机里没有这条）；在手机上打开一次该号会自动对齐"
         }
+            if !r.note.isEmpty { sub += " · " + r.note }
         }
         // ★ 2026-11-15：显示容器里「最新一条会话」的创建时间 —— 一眼看出最近有没有更新过
         if let newest = r.sessions.compactMap({ $0.createdAt }).max() {
@@ -651,6 +727,7 @@ final class CredViewController: UIViewController {
             let startFlow = {
                 self.runFlow(name: ph, container: r.container,
                              known: Set(r.sessions.map { $0.uid }), createIfMissing: false,
+                             craneID: r.craneID,
                              title: "重新获取 \(masked)")
             }
             // ★ 先重推现有会话（含最新的那条）：195 这种「服务端说过期、但容器里其实有一条还能用」
@@ -678,8 +755,11 @@ final class CredViewController: UIViewController {
         confirm("清空 \(masked) 的容器数据",
                 "会删除该容器的全部数据（Crane --wipe），**这个号要重新登录**。确定？") { [weak self] in
             guard let self = self else { return }
-            let (rc, out) = Crane.run(Crane.cranectl, ["--wipe", Crane.appBundle, "name:" + ph])
-            AppLog.w("crane | wipe \(ph) rc=\(rc) \(out.prefix(60))")
+            // ★ 2026-11-15：有容器 id 就按 id 清（DEFAULT / UUID）—— 别按手机号猜容器名，
+            //   否则默认容器的行可能把另一个同号容器清掉
+            let target = r.craneID.isEmpty ? ("name:" + ph) : r.craneID
+            let (rc, out) = Crane.run(Crane.cranectl, ["--wipe", Crane.appBundle, target])
+            AppLog.w("crane | wipe \(target) rc=\(rc) \(out.prefix(60))")
             self.toast(rc == 0 ? "已清空 \(masked) 的数据" : "清空失败（\(rc)）", ok: rc == 0)
             self.scan()
         }
@@ -706,7 +786,7 @@ final class CredViewController: UIViewController {
 
     /// 统一的「切容器 → 拉起 → 等凭证」流程（带步骤卡片 + 倒计时 + 进度通知）
     private func runFlow(name: String, container: String?, known: Set<String>,
-                         createIfMissing: Bool, title: String) {
+                         createIfMissing: Bool, craneID: String = "", title: String) {
         let steps = ["关闭旧进程", "切换 Crane 容器", "打开中国移动",
                      "等待登录完成", "读取凭证", "关闭中国移动"]
         let hud = StepHUD.show(in: view, title: title, steps: steps) { [weak self] in
@@ -718,7 +798,7 @@ final class CredViewController: UIViewController {
         hud.countdown(seconds: 2) { [weak self] in
             guard let self = self else { return }
             Reacquire.shared.start(name: name, container: container, known: known,
-                                   createIfMissing: createIfMissing,
+                                   createIfMissing: createIfMissing, craneID: craneID,
                                    stage: { st, detail in
                 // 切走后界面看不到，但回到前台时还能看到进度
                 hud.setStep(st.rawValue, detail: detail)

@@ -145,6 +145,16 @@ enum Crane {
         return rc == 0
     }
 
+    /// 按 Crane 容器 id 切换（DEFAULT / UUID）
+    /// ★ 2026-11-15：容器名是用户起的，不一定等于行里的手机号（默认容器改过名就是例子），
+    ///   能拿到 id 就按 id 定位，别拿手机号去猜。
+    static func switchTo(id: String) -> Bool {
+        guard !id.isEmpty else { return false }
+        let (rc, out) = run(cranectl, ["--switch", appBundle, id])
+        AppLog.w("crane | switch id \(id) rc=\(rc) \(out.prefix(80))")
+        return rc == 0
+    }
+
     // MARK: - 中国移动进程
 
     /// 正在运行的 pid（没运行返回 0）

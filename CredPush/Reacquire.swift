@@ -61,6 +61,7 @@ final class Reacquire {
                container: String?,
                known: Set<String>,
                createIfMissing: Bool = false,
+               craneID: String = "",
                stage: @escaping (Stage, String) -> Void,
                done: @escaping (Bool, String, FoundSession?) -> Void) {
         guard !running else { done(false, "已经有一个在进行中", nil); return }
@@ -101,7 +102,10 @@ final class Reacquire {
                 _ = Crane.run(Crane.cranectl, ["--create", Crane.appBundle, name])
             }
             emit(.switchContainer, "切换到容器 \(name)…")
-            guard Crane.switchTo(name: name) else {
+            // ★ 2026-11-15：有容器 id 就按 id 切（DEFAULT / UUID）—— 容器名是用户起的，
+            //   不一定等于行里的手机号（默认容器被改过名就是例子）
+            let switched = craneID.isEmpty ? Crane.switchTo(name: name) : Crane.switchTo(id: craneID)
+            guard switched else {
                 self.running = false
                 LiveProgress.shared.end("切换容器失败")
                 done(false, "切换容器失败", nil)

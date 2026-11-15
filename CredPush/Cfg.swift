@@ -189,17 +189,22 @@ enum AccountCache {
                 var a2: [String: Bool] = [:]
                 var v1: [String: String] = [:]
                 var v2: [String: String] = [:]
+                // ★ 2026-11-15：/api/state 也带 app_uid —— 顺手更新，凭证页才不会拿旧 UID
+                //   去比、把已经同步好的会话误报成「会话已更新」
+                var u2: [String: String] = [:]
                 for it in items {
                     guard let ph = it["phone"] as? String else { continue }
                     if let sc = it["source"] as? String, !sc.isEmpty { s2[ph] = sc }
                     if let al = it["alive"] as? Bool { a2[ph] = al }
                     if let vv = it["via"] as? String, !vv.isEmpty { v1[ph] = vv }
                     if let tt = it["via_t"] as? String, !tt.isEmpty { v2[ph] = tt }
+                    if let uu = it["app_uid"] as? String, !uu.isEmpty { u2[ph] = uu }
                 }
                 source = s2
                 alive = a2
                 via = v1
                 viaT = v2
+                if !u2.isEmpty { uid = u2 }
             }
             let same = (v == lastVersion) && !known.isEmpty
             lastVersion = v
