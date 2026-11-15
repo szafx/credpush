@@ -484,9 +484,10 @@ final class CredViewController: UIViewController {
         if let v = AccountCache.via[r.phone], !v.isEmpty {
             let word: String
             switch v {
-            case "daemon": word = "daemon 直推"
-            case "pull":   word = "拉起 App"
-            default:       word = "App 推送"
+            case "daemon":    word = "daemon 直推"     // 看门狗直接推，没碰 App
+            case "pull":      word = "daemon 拉起"     // daemon 拉起 App 后自动推
+            case "reacquire": word = "App 重新获取"    // 用户点「重新获取」
+            default:          word = "手动推送"        // 用户点「推送」
             }
             // 时间已经由「最新会话 xx:xx」显示了，这里只补一个方式标签（省字数）
             sub += " · \(word)"

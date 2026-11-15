@@ -10,6 +10,10 @@ enum PullRequest {
 
     /// 这次 pull 是不是把 App 从后台/冷启动拉起来的？是的话推完要送回中国移动。
     static var returnToChinaMobile = false
+    /// ★ 2026-11-15：这次推送是「daemon 拉起 App」触发的吗？（用于给服务端标注 via）
+    ///   true  = daemon 通过 credpush://pull 拉起 → via=pull
+    ///   false = 用户自己在 App 里点「重新获取」 → via=reacquire
+    static var fromDaemon = false
 
     /// 处理一个 URL；不是我们的就返回 false。
     @discardableResult
@@ -19,6 +23,7 @@ enum PullRequest {
         let c = URLComponents(url: url, resolvingAgainstBaseURL: false)?
             .queryItems?.first(where: { $0.name == "c" })?.value ?? ""
         pendingContainer = c
+        fromDaemon = true
         AppLog.w("pull | 守护进程请求补抓 container=\(c.isEmpty ? "-" : c)")
         NotificationCenter.default.post(name: changed, object: nil)
         return true
