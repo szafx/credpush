@@ -19,7 +19,7 @@ final class AccountsViewController: UIViewController, UIGestureRecognizerDelegat
         view.backgroundColor = Theme.bg
         title = "账号"
         navigationItem.rightBarButtonItem = UIBarButtonItem(
-            title: "刷新", style: .plain, target: self, action: #selector(pull))
+            title: "刷新", style: .plain, target: self, action: #selector(forceReload))
         navigationItem.rightBarButtonItem?.tintColor = Theme.cyan
 
         scroll.translatesAutoresizingMaskIntoConstraints = false
@@ -58,7 +58,11 @@ final class AccountsViewController: UIViewController, UIGestureRecognizerDelegat
         load(force: false)
     }
 
-    @objc private func pull() { load(force: true) }
+    /// 下拉：走非强制 —— 服务端有缓存就先回（秒到），过期会在后台重算
+    @objc private func pull() { load(force: false) }
+
+    /// 右上角「刷新」：强制重算（会真的去问中国移动，约 4~6 秒）
+    @objc private func forceReload() { load(force: true) }
 
     private func tap() {
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
