@@ -48,7 +48,7 @@ final class AccountsViewController: UIViewController, UIGestureRecognizerDelegat
             stack.trailingAnchor.constraint(equalTo: scroll.frameLayoutGuide.trailingAnchor, constant: -16),
         ])
 
-        load(force: false)
+        load(force: false, cacheOnly: true)   // 进页面只读缓存
     }
 
     /// 每次回到「账号」页：距上次成功加载超过 5 分钟就自动查一次
@@ -57,7 +57,7 @@ final class AccountsViewController: UIViewController, UIGestureRecognizerDelegat
         super.viewDidAppear(animated)
         guard !busy else { return }
         if let t = lastLoaded, Date().timeIntervalSince(t) < 300 { return }
-        load(force: false)
+        load(force: false, cacheOnly: true)   // 回页面也只读缓存（卡券由服务端每天 2 次定时刷）
     }
 
     /// 下拉：**只读缓存** —— 不触发任何上游请求（卡券/余额由服务端每天定时刷 2 次）
