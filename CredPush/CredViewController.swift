@@ -169,6 +169,14 @@ final class CredViewController: UIViewController {
     private func doScan() {
         DispatchQueue.global(qos: .userInitiated).async {
             let containers = Scanner.allContainers()
+            // ★ 容器显示名：主容器叫「默认」，Crane 分身用用户起的名字（如 19523001434）
+            let craneNames = Dictionary(uniqueKeysWithValues: Crane.list().map { ($0.id, $0.name) })
+            func containerLabel(_ path: String) -> String {
+                if path.isEmpty { return "" }
+                if !path.contains("/___Crane_Containers/") { return "默认" }
+                let cid = (path as NSString).lastPathComponent
+                return craneNames[cid] ?? String(cid.prefix(8))
+            }
             var rs: [CredRow] = []
             var onDevice = Set<String>()
             var uidContainer: [String: String] = [:]   // uid -> 容器路径（跨容器认领用）
@@ -206,11 +214,10 @@ final class CredViewController: UIViewController {
                 let srcMint = ((AccountCache.source[ph] ?? "app") == "mint")
                 let aliveOK = (AccountCache.alive[ph] ?? true)
                 if !su.isEmpty, let cp = uidContainer[su] {
-                    let cname = (cp as NSString).lastPathComponent
                     rs.append(CredRow(phone: ph, container: cp, sessions: [],
                                       status: srcMint ? .remoteOnly : .upToDate,
                                       hasMatch: true, cacheBytes: 0,
-                                      note: "会话在容器 \(cname.prefix(8))…（该容器登记的是别的号）"))
+                                      note: "会话在「\(containerLabel(cp))」容器里（该容器登记的是别的号）"))
                 } else if srcMint && aliveOK {
                     rs.append(CredRow(phone: ph, container: "", sessions: [],
                                       status: .remoteOnly, hasMatch: false, cacheBytes: 0))
