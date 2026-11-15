@@ -488,11 +488,8 @@ final class CredViewController: UIViewController {
             case "pull":   word = "拉起 App"
             default:       word = "App 推送"
             }
-            var when = ""
-            if let ts = AccountCache.viaT[r.phone], ts.count >= 16 {
-                when = " " + String(ts.dropFirst(11).prefix(5))
-            }
-            sub += " · 更新：\(word)\(when)"
+            // 时间已经由「最新会话 xx:xx」显示了，这里只补一个方式标签（省字数）
+            sub += " · \(word)"
         }
         if r.cacheBytes > 0 {
             sub += " · 缓存 " + CacheCleaner.fmt(r.cacheBytes)
