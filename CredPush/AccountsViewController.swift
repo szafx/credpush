@@ -159,6 +159,14 @@ final class AccountsViewController: UIViewController, UIGestureRecognizerDelegat
                         if let al = it["server_session_alive"] as? Bool { AccountCache.alive[ph] = al }
                     }
                 }
+                AccountCache.via = [:]
+                AccountCache.viaT = [:]
+                for it in self.items {
+                    if let ph = it["phone"] as? String {
+                        if let vv = it["last_via"] as? String, !vv.isEmpty { AccountCache.via[ph] = vv }
+                        if let tt = it["last_push_at"] as? String, !tt.isEmpty { AccountCache.viaT[ph] = tt }
+                    }
+                }
                 if let v = d["v"] as? String { AccountCache.lastVersion = v }
                 // ★ 2026-11-15：服务端先回了缓存（stale=true），后台正在重算 ——
                 //   5 秒后静默再拉一次，用户不用等就能看到最新值。

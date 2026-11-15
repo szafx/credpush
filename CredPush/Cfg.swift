@@ -141,6 +141,10 @@ enum AccountCache {
     static var source: [String: String] = [:]
     /// phone -> 服务端侧会话是否还活着（来自续期日志；缺省 true）
     static var alive: [String: Bool] = [:]
+    /// phone -> 最近一次会话是怎么推上去的（daemon=直推 / app=手动 / pull=拉起后自动）
+    static var via: [String: String] = [:]
+    /// phone -> 那次推送的时间（yyyy-MM-dd HH:mm:ss）
+    static var viaT: [String: String] = [:]
     /// /api/state 的版本号（用来跳过全量刷新）
     static var lastVersion: String = ""
     static var updated: Date?
@@ -157,13 +161,19 @@ enum AccountCache {
             if let items = d["items"] as? [[String: Any]] {
                 var s2: [String: String] = [:]
                 var a2: [String: Bool] = [:]
+                var v1: [String: String] = [:]
+                var v2: [String: String] = [:]
                 for it in items {
                     guard let ph = it["phone"] as? String else { continue }
                     if let sc = it["source"] as? String, !sc.isEmpty { s2[ph] = sc }
                     if let al = it["alive"] as? Bool { a2[ph] = al }
+                    if let vv = it["via"] as? String, !vv.isEmpty { v1[ph] = vv }
+                    if let tt = it["via_t"] as? String, !tt.isEmpty { v2[ph] = tt }
                 }
                 source = s2
                 alive = a2
+                via = v1
+                viaT = v2
             }
             let same = (v == lastVersion) && !known.isEmpty
             lastVersion = v
@@ -202,6 +212,14 @@ enum AccountCache {
                         if let ph = it["phone"] as? String {
                             if let sc = it["app_uid_source"] as? String, !sc.isEmpty { source[ph] = sc }
                             if let al = it["server_session_alive"] as? Bool { alive[ph] = al }
+                        }
+                    }
+                    via = [:]
+                    viaT = [:]
+                    for it in items {
+                        if let ph = it["phone"] as? String {
+                            if let vv = it["last_via"] as? String, !vv.isEmpty { via[ph] = vv }
+                            if let tt = it["last_push_at"] as? String, !tt.isEmpty { viaT[ph] = tt }
                         }
                     }
                     if let v = d["v"] as? String { lastVersion = v }

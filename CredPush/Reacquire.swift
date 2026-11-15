@@ -189,6 +189,7 @@ final class Reacquire {
             "device": UIDevice.current.name,
             "ios": UIDevice.current.systemVersion,
             "app": "credpush/1.0",
+            "via": "pull",
         ]
         Net.callPanel("/api/cred/push", json: body,
                       headers: ["X-Cred-Token": Cfg.pushToken], timeout: 60) { [weak self] r in

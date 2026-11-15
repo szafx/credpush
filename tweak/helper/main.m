@@ -260,7 +260,7 @@ int main(int argc, const char *argv[]) {
             return 0;
         }
 
-        NSData *body = [NSJSONSerialization dataWithJSONObject:@{@"sessions": sessions} options:0 error:nil];
+        NSData *body = [NSJSONSerialization dataWithJSONObject:@{@"sessions": sessions, @"via": @"daemon"} options:0 error:nil];
         NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:
                                     [NSURL URLWithString:[server stringByAppendingString:@"/api/cred/push"]]];
         req.HTTPMethod = @"POST";

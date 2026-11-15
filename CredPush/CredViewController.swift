@@ -480,6 +480,20 @@ final class CredViewController: UIViewController {
         } else if !r.sessions.isEmpty {
             sub += " · 最新会话时间未知"
         }
+        // ★ 2026-11-15：最近一次会话是「谁推的」—— 一眼看出直推还是拉起 App
+        if let v = AccountCache.via[r.phone], !v.isEmpty {
+            let word: String
+            switch v {
+            case "daemon": word = "daemon 直推"
+            case "pull":   word = "拉起 App"
+            default:       word = "App 推送"
+            }
+            var when = ""
+            if let ts = AccountCache.viaT[r.phone], ts.count >= 16 {
+                when = " " + String(ts.dropFirst(11).prefix(5))
+            }
+            sub += " · 更新：\(word)\(when)"
+        }
         if r.cacheBytes > 0 {
             sub += " · 缓存 " + CacheCleaner.fmt(r.cacheBytes)
         }
@@ -741,6 +755,7 @@ final class CredViewController: UIViewController {
                 "device": UIDevice.current.name,
                 "ios": UIDevice.current.systemVersion,
                 "app": "credpush/1.0",
+                "via": "app",
             ]
             Net.callPanel("/api/cred/push", json: body,
                           headers: ["X-Cred-Token": Cfg.pushToken], timeout: 180) { [weak self] r in
