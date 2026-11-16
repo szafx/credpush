@@ -157,8 +157,10 @@ final class AccountsViewController: UIViewController, UIGestureRecognizerDelegat
                         AccountCache.uid[ph] = u
                     }
                 }
+                // ★ 2026-11-16：只有「凭证类」错误才算掉线。任务清单/签到这类瞬时错误
+                //   以前也会被算成掉线 → 弹「1 个号掉线」，刷新一下又好了（实测 6589 误报）。
                 AccountCache.dead = Set(self.items.filter {
-                    !((($0["err"] as? String) ?? "").isEmpty)
+                    AccountCache.isCredErr(($0["err"] as? String) ?? "")
                 }.compactMap { $0["phone"] as? String })
                 // ★ 2026-11-15：会话来源 + 服务端存活 + 状态版本号
                 AccountCache.source = [:]
@@ -191,14 +193,25 @@ final class AccountsViewController: UIViewController, UIGestureRecognizerDelegat
                 }
                 AccountCache.updated = Date()
                 LocalStore.save("accounts_cache.json", d)
-                let newly = AccountCache.dead.subtracting(AccountCache.notifiedDead)
-                if !newly.isEmpty {
-                    Notifier.alert("\(newly.count) 个号掉线",
-                                   newly.map { String($0.suffix(4)) }.joined(separator: "、")
-                                   + " —— 去「凭证」页扫描推送")
-                    AccountCache.notifiedDead = AccountCache.dead
-                } else if AccountCache.dead.isEmpty {
-                    AccountCache.notifiedDead = []
+                // ★ 2026-11-16：stale（缓存）快照不弹掉线通知 —— 5 秒后会再拉一次新的再判断。
+                //   以前拿旧快照直接弹，会出现「通知说掉线、刷新后却正常」的假警报。
+                if (d["stale"] as? Bool) != true {
+                    let newly = AccountCache.dead.subtracting(AccountCache.notifiedDead)
+                    if !newly.isEmpty {
+                        let why = newly.compactMap { ph -> String? in
+                            guard let it = self.items.first(where: { ($0["phone"] as? String) == ph }),
+                                  let e = it["err"] as? String, !e.isEmpty else { return nil }
+                            return "\(ph.suffix(4)): \(e.prefix(40))"
+                        }.joined(separator: "；")
+                        Notifier.alert("\(newly.count) 个号掉线",
+                                       (why.isEmpty
+                                        ? newly.map { String($0.suffix(4)) }.joined(separator: "、")
+                                        : why)
+                                       + " —— 去「凭证」页扫描推送")
+                        AccountCache.notifiedDead = AccountCache.dead
+                    } else if AccountCache.dead.isEmpty {
+                        AccountCache.notifiedDead = []
+                    }
                 }
                 self.lastLoaded = Date()
                 self.hint.text = (d["t"] as? String).map { "更新于 \($0)" } ?? ""
@@ -301,7 +314,8 @@ final class AccountsViewController: UIViewController, UIGestureRecognizerDelegat
 
         let stateColor: UIColor
         let stateText: String
-        if !err.isEmpty { stateColor = Theme.red; stateText = "掉线" }
+        if AccountCache.isCredErr(err) { stateColor = Theme.red; stateText = "掉线" }
+        else if !err.isEmpty { stateColor = Theme.amber; stateText = "有错误" }
         else if let a = age, a >= 18 * 60 { stateColor = Theme.amber; stateText = "快到期" }
         else { stateColor = Theme.green; stateText = "正常" }
 

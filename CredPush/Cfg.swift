@@ -212,6 +212,16 @@ enum AccountCache {
         }
     }
 
+    /// 只有「凭证类」错误才算掉线（任务/签到/话费/卡券这类瞬时错误不算）
+    static func isCredErr(_ e: String) -> Bool {
+        if e.isEmpty { return false }
+        if e.contains("任务清单") || e.contains("签到") || e.contains("话费") || e.contains("卡券") {
+            return false
+        }
+        return e.contains("登录") || e.contains("jwt") || e.contains("过期")
+            || e.contains("GOTO_LOGIN") || e.contains("NO_ACCESS")
+    }
+
     static func refresh(completion: @escaping () -> Void) {
         func fetch(_ retry: Bool) {
             Net.callPanel("/api/accounts", json: ["force": false], timeout: 90) { r in
@@ -255,7 +265,7 @@ enum AccountCache {
                     }
                     if let v = d["v"] as? String { lastVersion = v }
                     dead = Set(items.filter {
-                        !((($0["err"] as? String) ?? "").isEmpty)
+                        isCredErr(($0["err"] as? String) ?? "")
                     }.compactMap { $0["phone"] as? String })
                     updated = Date()
                 }
