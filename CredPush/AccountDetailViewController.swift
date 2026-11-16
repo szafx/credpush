@@ -242,8 +242,15 @@ final class AccountDetailViewController: UIViewController {
     private func couponsCard() -> UIView {
         let v = Theme.card(16)
         let cs = (item["coupons"] as? [[String: Any]]) ?? []
-        var rows: [UIView] = [Theme.label("我的卡券（共 \(cs.count) 张）· 点「兑换」可在这台手机上用掉；加赠券只展示充值规则",
-                                          size: 12, color: Theme.dim, lines: 2)]
+        // ★ 2026-11-16：本月话费券（抢兑/秒杀/兑换的账本，服务端下发）
+        let cm = (item["coupon_month"] as? [String: Any]) ?? [:]
+        let cmAmt = Num.dbl(cm["amount"]) ?? 0
+        let cmN = Num.int(cm["count"]) ?? 0
+        var rows: [UIView] = [
+            Theme.label("本月话费券 \(cmAmt) 元（\(cmN) 张）", size: 12.5, weight: .semibold,
+                        color: Theme.cyan, lines: 1),
+            Theme.label("我的卡券（共 \(cs.count) 张）· 点「兑换」可在这台手机上用掉；加赠券只展示充值规则",
+                        size: 12, color: Theme.dim, lines: 2)]
         if cs.isEmpty {
             rows.append(Theme.label("没有券", size: 12, color: Theme.dim))
         } else {

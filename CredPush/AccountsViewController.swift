@@ -365,6 +365,14 @@ final class AccountsViewController: UIViewController, UIGestureRecognizerDelegat
             }
         }
 
+        // ★ 2026-11-16：本月话费券（抢兑/秒杀/兑换的账本，服务端下发）
+        var monthRow: UIView? = nil
+        if let cm = it["coupon_month"] as? [String: Any],
+           let amt = Num.dbl(cm["amount"]), let n = Num.int(cm["count"]) {
+            monthRow = Theme.label("本月话费券 \(amt) 元（\(n) 张）", size: 11.5,
+                                   color: Theme.cyan, lines: 1)
+        }
+
         let bar = LifeBar()
         bar.set(hours: age.map { $0 / 60 }, dead: !err.isEmpty)
 
@@ -384,6 +392,7 @@ final class AccountsViewController: UIViewController, UIGestureRecognizerDelegat
 
         var parts: [UIView] = [head, row2]
         if let rl = richRow { parts.append(rl) }
+        if let mr = monthRow { parts.append(mr) }
         parts.append(bar)
         if !pills.isEmpty { parts.append(Theme.hstack(pills, spacing: 6)) }
 
