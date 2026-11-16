@@ -242,7 +242,7 @@ final class AccountDetailViewController: UIViewController {
     private func couponsCard() -> UIView {
         let v = Theme.card(16)
         let cs = (item["coupons"] as? [[String: Any]]) ?? []
-        var rows: [UIView] = [Theme.label("我的卡券（共 \(cs.count) 张）· 点「兑换」可在这台手机上用掉",
+        var rows: [UIView] = [Theme.label("我的卡券（共 \(cs.count) 张）· 点「兑换」可在这台手机上用掉；加赠券只展示充值规则",
                                           size: 12, color: Theme.dim, lines: 2)]
         if cs.isEmpty {
             rows.append(Theme.label("没有券", size: 12, color: Theme.dim))
@@ -274,6 +274,14 @@ final class AccountDetailViewController: UIViewController {
                                         color: (g.days ?? 99) <= 3 ? Theme.red : Theme.dim,
                                         mono: true)
                 right.setContentHuggingPriority(.required, for: .horizontal)
+                // ★ 2026-11-16：话费「加赠券」只在移动 App 充值触发，不给「兑换」，只展示规则
+                if (g.first["recharge"] as? Bool) == true {
+                    let hint = (g.first["hint"] as? String) ?? "充值后可用"
+                    let tip = Theme.label(hint, size: 11, color: Theme.dim, lines: 1)
+                    tip.setContentHuggingPriority(.required, for: .horizontal)
+                    rows.append(Theme.hstack([left, Theme.spacer(), right, tip], spacing: 8))
+                    continue
+                }
                 let btn = UIButton(type: .system)
                 btn.setTitle("兑换", for: .normal)
                 btn.titleLabel?.font = UIFont.systemFont(ofSize: 12, weight: .semibold)
